@@ -254,7 +254,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ## Security
 
-Please report security issues to [your-email@example.com]. See our [Security Policy](SECURITY.md) for more details.
+Please report security issues to gerhard@equalexperts.com. See our [Security Policy](SECURITY.md) for more details.
 
 ## License
 
