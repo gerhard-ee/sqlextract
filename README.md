@@ -8,6 +8,8 @@ A powerful CLI tool for extracting data from various SQL databases into CSV or P
   - PostgreSQL
   - DuckDB
   - BigQuery
+  - Snowflake
+  - Databricks
 - Scalable data extraction with batch processing
 - Resumable extraction support
 - Output formats:
@@ -79,23 +81,58 @@ sqlextract \
   --batch-size 10000
 ```
 
+### Snowflake Example
+```bash
+sqlextract \
+  --type snowflake \
+  --account myaccount.snowflakecomputing.com \
+  --username myuser \
+  --password mypass \
+  --database mydb \
+  --warehouse compute_wh \
+  --schema public \
+  --table mytable \
+  --output data.parquet \
+  --format parquet \
+  --batch-size 10000
+```
+
+### Databricks Example
+```bash
+sqlextract \
+  --type databricks \
+  --host my-workspace.cloud.databricks.com \
+  --token dapi1234567890abcdef \
+  --catalog my_catalog \
+  --database my_database \
+  --schema my_schema \
+  --table my_table \
+  --output data.parquet \
+  --format parquet \
+  --batch-size 10000
+```
+
 ## Configuration
 
 The tool supports various configuration options through command-line flags:
 
-- `--type`: Database type (postgres, duckdb, bigquery)
-- `--host`: Database host (for PostgreSQL)
+- `--type`: Database type (postgres, duckdb, bigquery, snowflake, databricks)
+- `--host`: Database host (for PostgreSQL, Databricks)
 - `--port`: Database port (for PostgreSQL)
-- `--username`: Database username (for PostgreSQL)
-- `--password`: Database password (for PostgreSQL)
+- `--username`: Database username (for PostgreSQL, Snowflake)
+- `--password`: Database password (for PostgreSQL, Snowflake)
 - `--database`: Database name
-- `--schema`: Schema name (for PostgreSQL)
+- `--schema`: Schema name (for PostgreSQL, Snowflake, Databricks)
 - `--table`: Table name to extract
 - `--output`: Output file path
 - `--format`: Output format (csv, parquet)
 - `--batch-size`: Number of rows to extract per batch
 - `--project-id`: GCP project ID (for BigQuery)
 - `--credentials-file`: Path to GCP credentials file (for BigQuery)
+- `--account`: Snowflake account identifier (for Snowflake)
+- `--warehouse`: Snowflake warehouse name (for Snowflake)
+- `--token`: Databricks access token (for Databricks)
+- `--catalog`: Databricks catalog name (for Databricks)
 
 ## Development
 
@@ -105,6 +142,8 @@ The tool supports various configuration options through command-line flags:
 - PostgreSQL (for testing)
 - DuckDB
 - Google Cloud SDK (for BigQuery)
+- Snowflake account (for testing)
+- Databricks workspace (for testing)
 - Make
 - Docker (optional)
 
