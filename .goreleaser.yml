@@ -44,8 +44,8 @@ changelog:
 
 dockers:
   - image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/{{ .ProjectName }}:{{ .Version }}"
-      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/{{ .ProjectName }}:latest"
+      - "ghcr.io/gerhard-ee/{{ .ProjectName }}:{{ .Version }}"
+      - "ghcr.io/gerhard-ee/{{ .ProjectName }}:latest"
     dockerfile: Dockerfile
     build_flag_templates:
       - "--pull"
