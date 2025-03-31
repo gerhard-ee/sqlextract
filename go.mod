@@ -7,6 +7,7 @@ toolchain go1.24.1
 require (
 	cloud.google.com/go/bigquery v1.59.1
 	github.com/databricks/databricks-sql-go v1.6.2
+	github.com/denisenkom/go-mssqldb v0.12.3
 	github.com/lib/pq v1.10.9
 	github.com/marcboeker/go-duckdb v1.8.5
 	github.com/snowflakedb/gosnowflake v1.8.0
@@ -59,6 +60,8 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/godbus/dbus v0.0.0-20190726142602-4481cbc300e2 // indirect
+	github.com/golang-sql/civil v0.0.0-20190719163853-cb61b32ac6fe // indirect
+	github.com/golang-sql/sqlexp v0.1.0 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v0.0.4 // indirect

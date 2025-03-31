@@ -59,3 +59,35 @@ func TestSnowflakeDB(t *testing.T) {
 		t.Fatal("Failed to create Snowflake database instance")
 	}
 }
+
+func TestDatabricksDB(t *testing.T) {
+	config := &Config{
+		Host:     "test-workspace.cloud.databricks.com",
+		Username: "testuser",
+		Password: "testpass",
+		Database: "testdb",
+		Schema:   "public",
+		Catalog:  "test_catalog",
+	}
+
+	db := NewDatabricks(config)
+	if db == nil {
+		t.Fatal("Failed to create Databricks database instance")
+	}
+}
+
+func TestMSSQLDB(t *testing.T) {
+	config := &Config{
+		Host:     "localhost",
+		Port:     1433,
+		Username: "sa",
+		Password: "testpass",
+		Database: "testdb",
+		Schema:   "dbo",
+	}
+
+	db := NewMSSQL(config)
+	if db == nil {
+		t.Fatal("Failed to create SQL Server database instance")
+	}
+}

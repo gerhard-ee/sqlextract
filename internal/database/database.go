@@ -22,6 +22,12 @@ func NewDatabase(config *Config) (Database, error) {
 		return NewDuckDB(config), nil
 	case "bigquery":
 		return NewBigQueryDB(config), nil
+	case "snowflake":
+		return NewSnowflake(config), nil
+	case "databricks":
+		return NewDatabricks(config), nil
+	case "mssql":
+		return NewMSSQL(config), nil
 	default:
 		return nil, fmt.Errorf("unsupported database type: %s", config.Type)
 	}

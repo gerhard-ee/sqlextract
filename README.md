@@ -1,261 +1,145 @@
 # SQL Extract
 
-A powerful CLI tool for extracting data from various SQL databases into CSV or Parquet formats. Built with Go, this tool provides a simple and efficient way to extract data from different database types with support for resumable operations and state management.
+A powerful CLI tool for extracting data from SQL databases with support for resumable operations and state management.
 
 ## Features
 
-- Support for multiple database types:
+- Support for multiple databases:
   - PostgreSQL
   - DuckDB
   - BigQuery
   - Snowflake
-  - Databricks
-- Scalable data extraction with batch processing
-- Resumable extraction support
-- Output formats:
-  - CSV
-  - Parquet
-- Configurable batch size and parallel processing
-- State management for tracking extraction progress
+  - SQL Server
+- Batch processing with configurable batch size
+- Resumable operations
+- Multiple output formats (CSV, Parquet)
 - Comprehensive test coverage
 - Production-ready CI/CD pipeline
 
 ## Installation
 
-### From Source
+### Using Go Install
+
 ```bash
-git clone https://github.com/gerhard-ee/sqlextract.git
-cd sqlextract
-make build
+go install github.com/gerhardlazu/sqlextract@latest
 ```
 
-### Using Go Install
+### Building from Source
+
 ```bash
-go install github.com/gerhard-ee/sqlextract/cmd/sqlextract@latest
+git clone https://github.com/gerhardlazu/sqlextract.git
+cd sqlextract
+go build -o sqlextract cmd/sqlextract/main.go
 ```
 
 ### Using Docker
+
 ```bash
-docker pull gerhard-ee/sqlextract:latest
+docker pull gerhardlazu/sqlextract:latest
 ```
 
 ## Usage
 
-### PostgreSQL Example
+### PostgreSQL
+
 ```bash
 sqlextract \
   --type postgres \
   --host localhost \
   --port 5432 \
   --username myuser \
-  --password mypass \
+  --password mypassword \
   --database mydb \
   --schema public \
   --table mytable \
-  --output data.parquet \
-  --format parquet \
-  --batch-size 10000
+  --output data.csv
 ```
 
-### DuckDB Example
+### SQL Server
+
 ```bash
 sqlextract \
-  --type duckdb \
-  --database mydb.db \
+  --type mssql \
+  --host localhost \
+  --port 1433 \
+  --username sa \
+  --password MyPassword123 \
+  --database mydb \
+  --schema dbo \
   --table mytable \
-  --output data.csv \
-  --format csv \
-  --batch-size 10000
+  --output data.csv
 ```
 
-### BigQuery Example
+### BigQuery
+
 ```bash
 sqlextract \
   --type bigquery \
   --project-id my-project \
-  --credentials-file credentials.json \
+  --credentials-file path/to/credentials.json \
   --database mydataset \
   --table mytable \
-  --output data.parquet \
-  --format parquet \
-  --batch-size 10000
+  --output data.parquet
 ```
-
-### Snowflake Example
-```bash
-sqlextract \
-  --type snowflake \
-  --account myaccount.snowflakecomputing.com \
-  --username myuser \
-  --password mypass \
-  --database mydb \
-  --warehouse compute_wh \
-  --schema public \
-  --table mytable \
-  --output data.parquet \
-  --format parquet \
-  --batch-size 10000
-```
-
-### Databricks Example
-```bash
-sqlextract \
-  --type databricks \
-  --host my-workspace.cloud.databricks.com \
-  --token dapi1234567890abcdef \
-  --catalog my_catalog \
-  --database my_database \
-  --schema my_schema \
-  --table my_table \
-  --output data.parquet \
-  --format parquet \
-  --batch-size 10000
-```
-
-## Configuration
-
-The tool supports various configuration options through command-line flags:
-
-- `--type`: Database type (postgres, duckdb, bigquery, snowflake, databricks)
-- `--host`: Database host (for PostgreSQL, Databricks)
-- `--port`: Database port (for PostgreSQL)
-- `--username`: Database username (for PostgreSQL, Snowflake)
-- `--password`: Database password (for PostgreSQL, Snowflake)
-- `--database`: Database name
-- `--schema`: Schema name (for PostgreSQL, Snowflake, Databricks)
-- `--table`: Table name to extract
-- `--output`: Output file path
-- `--format`: Output format (csv, parquet)
-- `--batch-size`: Number of rows to extract per batch
-- `--project-id`: GCP project ID (for BigQuery)
-- `--credentials-file`: Path to GCP credentials file (for BigQuery)
-- `--account`: Snowflake account identifier (for Snowflake)
-- `--warehouse`: Snowflake warehouse name (for Snowflake)
-- `--token`: Databricks access token (for Databricks)
-- `--catalog`: Databricks catalog name (for Databricks)
 
 ## Development
 
 ### Prerequisites
 
 - Go 1.21 or later
-- PostgreSQL (for testing)
-- DuckDB
-- Google Cloud SDK (for BigQuery)
-- Snowflake account (for testing)
-- Databricks workspace (for testing)
-- Make
 - Docker (optional)
 
 ### Building from Source
 
 ```bash
-git clone https://github.com/gerhard-ee/sqlextract.git
+git clone https://github.com/gerhardlazu/sqlextract.git
 cd sqlextract
-make deps    # Install dependencies
-make test    # Run tests
-make build   # Build binary
+go build ./...
 ```
 
 ### Running Tests
 
 ```bash
-make test
+go test -v ./...
 ```
 
 ### Code Coverage
 
 ```bash
-make coverage
+go test -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out
 ```
 
 ### Linting
 
 ```bash
-make lint
+golangci-lint run
 ```
 
 ## Project Structure
 
 ```
-sqlextract/
+.
 ├── cmd/
-│   └── sqlextract/      # Main application entry point
+│   └── sqlextract/       # CLI application
 ├── internal/
-│   └── database/        # Database implementations
+│   └── database/         # Database implementations
 ├── pkg/
-│   ├── database/        # Database interfaces
-│   └── extractor/       # Data extraction logic
-├── .github/            # GitHub Actions and templates
-├── testdata/           # Test data files
-└── scripts/            # Build and deployment scripts
+│   └── database/         # Public database interface
+├── .github/              # GitHub Actions and templates
+├── go.mod               # Go module file
+├── go.sum               # Go module checksum
+└── README.md            # This file
 ```
-
-## Prompts Used
-
-The project was developed using the following prompts:
-
-1. Initial Project Setup:
-```
-Create a Go CLI application named "SQL Extract" for extracting data from SQL databases (MSSQL, MySQL, PostgreSQL) into CSV or Parquet formats. The application should focus on:
-- Scalability
-- Resumable extraction
-- Effective state management
-```
-
-2. Database Interface:
-```
-Implement a database interface that supports:
-- Connection management
-- Schema inspection
-- Data extraction with batching
-- Row counting
-```
-
-3. PostgreSQL Implementation:
-```
-Create a PostgreSQL implementation of the database interface with:
-- Connection handling
-- Schema inspection
-- Data extraction with batching
-- Error handling
-```
-
-4. Testing:
-```
-Create comprehensive tests for the PostgreSQL implementation, including:
-- Connection tests
-- Schema inspection tests
-- Data extraction tests
-- Error handling tests
-```
-
-5. Additional Database Support:
-```
-Add support for additional database types:
-- BigQuery
-- Snowflake
-- Databricks
-```
-
-6. Production Readiness:
-```
-Make the project production-ready by adding:
-- Source control
-- CI/CD pipeline
-- Documentation
-- Security policy
-- Issue and PR templates
-```
-
-## Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
 ## Security
 
-Please report security issues to gerhard@equalexperts.com. See our [Security Policy](SECURITY.md) for more details.
+Please report security issues via email rather than public GitHub issues. See [SECURITY.md](SECURITY.md) for details.
+
+## Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](.github/CONTRIBUTING.md) for guidelines.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details. 
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
