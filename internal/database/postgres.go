@@ -201,12 +201,27 @@ func (db *PostgresDB) ExtractData(table, outputFile, format string, batchSize in
 }
 
 func (db *PostgresDB) GetTotalRows(table string) (int64, error) {
+	// Try to get an exact count first
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
 	var count int64
 	err := db.db.QueryRow(query).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get total rows: %v", err)
 	}
+
+	// If the count is too large, use an approximate count
+	if count > 1000000 {
+		query = fmt.Sprintf(`
+			SELECT reltuples::bigint
+			FROM pg_class
+			WHERE oid = '%s'::regclass
+		`, table)
+		err = db.db.QueryRow(query).Scan(&count)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get approximate row count: %v", err)
+		}
+	}
+
 	return count, nil
 }
 

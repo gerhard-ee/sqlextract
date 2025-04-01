@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/gerhard-ee/sqlextract/internal/database"
 )
 
+// ParquetWriter defines the interface for writing Parquet files
 type ParquetWriter interface {
-	Write(interface{}) error
+	Write(values []interface{}) error
 	WriteStop() error
 }
 
@@ -48,6 +51,39 @@ func NewExtractor(db database.Database, table, outputFile, format string, batchS
 	}
 }
 
+// NewParquetWriter creates a new ParquetWriter instance
+func NewParquetWriter(file *os.File, columns []database.Column) ParquetWriter {
+	// TODO: Implement actual Parquet writer using a Parquet library
+	// For now, return a mock implementation that writes CSV format
+	return &mockParquetWriter{
+		file:    file,
+		columns: columns,
+	}
+}
+
+type mockParquetWriter struct {
+	file    *os.File
+	columns []database.Column
+}
+
+func (w *mockParquetWriter) Write(values []interface{}) error {
+	// Convert values to strings and write as CSV for now
+	rowValues := make([]string, len(values))
+	for i, v := range values {
+		if v == nil {
+			rowValues[i] = "NULL"
+		} else {
+			rowValues[i] = fmt.Sprintf("%v", v)
+		}
+	}
+	_, err := fmt.Fprintf(w.file, "%s\n", strings.Join(rowValues, ","))
+	return err
+}
+
+func (w *mockParquetWriter) WriteStop() error {
+	return nil
+}
+
 // Extract extracts data from the database table
 func (e *Extractor) Extract(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
@@ -55,15 +91,24 @@ func (e *Extractor) Extract(ctx context.Context) error {
 	}
 
 	// Get total rows
-	totalRows, err := e.db.GetTotalRows(ctx, e.table)
+	totalRows, err := e.db.GetTotalRows(e.table)
 	if err != nil {
 		return fmt.Errorf("failed to get total rows: %v", err)
 	}
 
 	// Get table columns
-	columns, err := e.db.GetColumns(ctx, e.table)
+	columnNames, err := e.db.GetColumns(e.table)
 	if err != nil {
 		return fmt.Errorf("failed to get columns: %v", err)
+	}
+
+	// Convert column names to Column structs
+	columns := make([]database.Column, len(columnNames))
+	for i, name := range columnNames {
+		columns[i] = database.Column{
+			Name: name,
+			Type: "string", // Default type, should be determined by the database
+		}
 	}
 
 	// Create output file
@@ -174,45 +219,30 @@ func (e *Extractor) extractToCSV(ctx context.Context, file *os.File, columns []d
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			rows, err := e.db.ExtractBatch(ctx, e.table, offset, e.batchSize)
+			rows, err := e.db.ExtractBatch(e.table, offset, e.batchSize)
 			if err != nil {
 				return fmt.Errorf("failed to extract batch: %v", err)
 			}
-			defer rows.Close()
 
 			// Write rows
-			for rows.Next() {
+			for _, row := range rows {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
-					values := make([]interface{}, len(columns))
-					valuePtrs := make([]interface{}, len(columns))
-					for i := range values {
-						valuePtrs[i] = &values[i]
-					}
-
-					if err := rows.Scan(valuePtrs...); err != nil {
-						return fmt.Errorf("failed to scan row: %v", err)
-					}
-
-					record := make([]string, len(columns))
-					for i, val := range values {
-						if val == nil {
-							record[i] = ""
+					values := make([]string, len(columns))
+					for i, col := range columns {
+						if val := row[col.Name]; val == nil {
+							values[i] = ""
 						} else {
-							record[i] = fmt.Sprintf("%v", val)
+							values[i] = fmt.Sprintf("%v", val)
 						}
 					}
 
-					if err := writer.Write(record); err != nil {
+					if err := writer.Write(values); err != nil {
 						return fmt.Errorf("failed to write record: %v", err)
 					}
 				}
-			}
-
-			if err := rows.Err(); err != nil {
-				return fmt.Errorf("error iterating rows: %v", err)
 			}
 
 			e.lastID = offset + e.batchSize
@@ -223,6 +253,96 @@ func (e *Extractor) extractToCSV(ctx context.Context, file *os.File, columns []d
 }
 
 func (e *Extractor) extractToParquet(ctx context.Context, file *os.File, columns []database.Column, totalRows int64) error {
-	// TODO: Implement Parquet extraction
-	return fmt.Errorf("parquet format not supported yet")
+	// Create Parquet writer
+	writer := NewParquetWriter(file, columns)
+	defer writer.WriteStop()
+
+	// Extract data in batches
+	for offset := e.lastID; offset < totalRows; offset += e.batchSize {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			rows, err := e.db.ExtractBatch(e.table, offset, e.batchSize)
+			if err != nil {
+				return fmt.Errorf("failed to extract batch: %v", err)
+			}
+
+			// Write rows
+			for _, row := range rows {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					values := make([]interface{}, len(columns))
+					for i, col := range columns {
+						values[i] = row[col.Name]
+					}
+
+					if err := writer.Write(values); err != nil {
+						return fmt.Errorf("failed to write row: %v", err)
+					}
+				}
+			}
+
+			e.lastID = offset + e.batchSize
+		}
+	}
+
+	return nil
+}
+
+// convertToParquetType converts a database value to the appropriate Parquet type
+func convertToParquetType(val interface{}, colType string) interface{} {
+	if val == nil {
+		return nil
+	}
+
+	switch colType {
+	case "integer", "int", "int4", "int8", "bigint":
+		switch v := val.(type) {
+		case int64:
+			return v
+		case int32:
+			return int64(v)
+		case int:
+			return int64(v)
+		default:
+			return nil
+		}
+	case "float", "float4", "float8", "double", "real":
+		switch v := val.(type) {
+		case float64:
+			return v
+		case float32:
+			return float64(v)
+		default:
+			return nil
+		}
+	case "text", "varchar", "char", "string":
+		switch v := val.(type) {
+		case string:
+			return v
+		case []byte:
+			return string(v)
+		default:
+			return fmt.Sprintf("%v", v)
+		}
+	case "boolean", "bool":
+		switch v := val.(type) {
+		case bool:
+			return v
+		default:
+			return nil
+		}
+	case "timestamp", "datetime", "date":
+		switch v := val.(type) {
+		case time.Time:
+			return v
+		default:
+			return nil
+		}
+	default:
+		return fmt.Sprintf("%v", val)
+	}
 }

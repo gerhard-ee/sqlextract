@@ -145,6 +145,7 @@ func (db *BigQueryDB) ExtractData(table, outputFile, format string, batchSize in
 }
 
 func (db *BigQueryDB) GetTotalRows(table string) (int64, error) {
+	// Try to get an exact count first
 	query := fmt.Sprintf("SELECT COUNT(*) as count FROM `%s.%s.%s`", db.config.ProjectID, db.config.Database, table)
 	ctx := context.Background()
 	q := db.client.Query(query)
@@ -157,6 +158,24 @@ func (db *BigQueryDB) GetTotalRows(table string) (int64, error) {
 	err = it.Next(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get total rows: %v", err)
+	}
+
+	// If the count is too large, use an approximate count
+	if count > 1000000 {
+		query = fmt.Sprintf(`
+			SELECT row_count
+			FROM \`%s.%s.__TABLES__\`
+			WHERE table_id = '%s'
+		`, db.config.ProjectID, db.config.Database, table)
+		q = db.client.Query(query)
+		it, err = q.Read(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("failed to execute approximate count query: %v", err)
+		}
+		err = it.Next(&count)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get approximate row count: %v", err)
+		}
 	}
 
 	return count, nil

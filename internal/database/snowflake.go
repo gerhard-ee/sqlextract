@@ -152,12 +152,27 @@ func (db *SnowflakeDB) ExtractData(table, outputFile, format string, batchSize i
 }
 
 func (db *SnowflakeDB) GetTotalRows(table string) (int64, error) {
+	// Try to get an exact count first
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
 	var count int64
 	err := db.db.QueryRow(query).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get total rows: %v", err)
 	}
+
+	// If the count is too large, use an approximate count
+	if count > 1000000 {
+		query = fmt.Sprintf(`
+			SELECT ROW_COUNT
+			FROM TABLE_INFORMATION
+			WHERE TABLE_NAME = $1
+		`)
+		err = db.db.QueryRow(query, table).Scan(&count)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get approximate row count: %v", err)
+		}
+	}
+
 	return count, nil
 }
 

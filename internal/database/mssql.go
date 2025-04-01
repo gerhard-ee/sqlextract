@@ -151,12 +151,28 @@ func (db *MSSQLDB) ExtractData(table, outputFile, format string, batchSize int) 
 }
 
 func (db *MSSQLDB) GetTotalRows(table string) (int64, error) {
+	// Try to get an exact count first
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
 	var count int64
 	err := db.db.QueryRow(query).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get total rows: %v", err)
 	}
+
+	// If the count is too large, use an approximate count
+	if count > 1000000 {
+		query = fmt.Sprintf(`
+			SELECT SUM(row_count)
+			FROM sys.dm_db_partition_stats
+			WHERE object_id = OBJECT_ID(@p1)
+			AND index_id < 2
+		`)
+		err = db.db.QueryRow(query, sql.Named("p1", table)).Scan(&count)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get approximate row count: %v", err)
+		}
+	}
+
 	return count, nil
 }
 
