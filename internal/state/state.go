@@ -1,8 +1,8 @@
 package state
 
 import (
-	"context"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -21,26 +21,13 @@ type State struct {
 
 // Manager defines the interface for state management
 type Manager interface {
-	// GetState retrieves the current state for a job
-	GetState(ctx context.Context, jobID string) (*State, error)
-
-	// UpdateState updates the state for a job
-	UpdateState(ctx context.Context, state *State) error
-
-	// CreateState creates a new state for a job
-	CreateState(ctx context.Context, state *State) error
-
-	// DeleteState removes the state for a job
-	DeleteState(ctx context.Context, jobID string) error
-
-	// ListStates retrieves all states for a given table
-	ListStates(ctx context.Context, table string) ([]*State, error)
-
-	// LockState acquires a lock on a state for a job
-	LockState(ctx context.Context, jobID string, ttl time.Duration) (bool, error)
-
-	// UnlockState releases a lock on a state for a job
-	UnlockState(ctx context.Context, jobID string) error
+	GetState(table string) (*State, error)
+	UpdateState(table string, processedRows int64) error
+	CreateState(state *State) error
+	DeleteState(jobID string) error
+	ListStates() ([]*State, error)
+	LockState(jobID string, duration time.Duration) (bool, error)
+	UnlockState(jobID string) error
 }
 
 // MemoryManager implements the Manager interface using in-memory storage
@@ -48,63 +35,107 @@ type Manager interface {
 type MemoryManager struct {
 	states map[string]*State
 	locks  map[string]time.Time
+	mu     sync.RWMutex
 }
 
 // NewMemoryManager creates a new in-memory state manager
-func NewMemoryManager() *MemoryManager {
+func NewMemoryManager() Manager {
 	return &MemoryManager{
 		states: make(map[string]*State),
 		locks:  make(map[string]time.Time),
 	}
 }
 
-func (m *MemoryManager) GetState(ctx context.Context, jobID string) (*State, error) {
-	if state, exists := m.states[jobID]; exists {
-		return state, nil
+func (m *MemoryManager) GetState(table string) (*State, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	state, exists := m.states[table]
+	if !exists {
+		return nil, fmt.Errorf("state not found for table: %s", table)
 	}
-	return nil, nil
+
+	return state, nil
 }
 
-func (m *MemoryManager) UpdateState(ctx context.Context, state *State) error {
-	m.states[state.JobID] = state
-	return nil
-}
+func (m *MemoryManager) UpdateState(table string, processedRows int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-func (m *MemoryManager) CreateState(ctx context.Context, state *State) error {
-	if _, exists := m.states[state.JobID]; exists {
-		return fmt.Errorf("state already exists for job %s", state.JobID)
+	state, exists := m.states[table]
+	if !exists {
+		state = &State{
+			Table:       table,
+			LastUpdated: time.Now(),
+			Status:      "running",
+		}
+		m.states[table] = state
 	}
-	m.states[state.JobID] = state
+
+	state.ProcessedRows = processedRows
+	state.LastUpdated = time.Now()
 	return nil
 }
 
-func (m *MemoryManager) DeleteState(ctx context.Context, jobID string) error {
-	delete(m.states, jobID)
-	delete(m.locks, jobID)
+func (m *MemoryManager) CreateState(state *State) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.states[state.Table]; exists {
+		return fmt.Errorf("state already exists for table: %s", state.Table)
+	}
+
+	m.states[state.Table] = state
 	return nil
 }
 
-func (m *MemoryManager) ListStates(ctx context.Context, table string) ([]*State, error) {
-	var states []*State
-	for _, state := range m.states {
-		if state.Table == table {
-			states = append(states, state)
+func (m *MemoryManager) DeleteState(jobID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for table, state := range m.states {
+		if state.JobID == jobID {
+			delete(m.states, table)
+			return nil
 		}
 	}
+
+	return fmt.Errorf("state not found for job ID: %s", jobID)
+}
+
+func (m *MemoryManager) ListStates() ([]*State, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	states := make([]*State, 0, len(m.states))
+	for _, state := range m.states {
+		states = append(states, state)
+	}
+
 	return states, nil
 }
 
-func (m *MemoryManager) LockState(ctx context.Context, jobID string, ttl time.Duration) (bool, error) {
-	if lockTime, exists := m.locks[jobID]; exists {
-		if time.Now().Before(lockTime) {
-			return false, nil
-		}
+func (m *MemoryManager) LockState(jobID string, duration time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	if lockTime, exists := m.locks[jobID]; exists && lockTime.After(now) {
+		return false, nil
 	}
-	m.locks[jobID] = time.Now().Add(ttl)
+
+	m.locks[jobID] = now.Add(duration)
 	return true, nil
 }
 
-func (m *MemoryManager) UnlockState(ctx context.Context, jobID string) error {
+func (m *MemoryManager) UnlockState(jobID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.locks[jobID]; !exists {
+		return fmt.Errorf("no lock found for job ID: %s", jobID)
+	}
+
 	delete(m.locks, jobID)
 	return nil
 }

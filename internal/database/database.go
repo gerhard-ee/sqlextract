@@ -1,46 +1,31 @@
 package database
 
 import (
-	"context"
 	"fmt"
 
+	"github.com/gerhard-ee/sqlextract/internal/config"
 	"github.com/gerhard-ee/sqlextract/internal/state"
 )
 
-// Database defines the interface for database operations
+// Database represents a database interface
 type Database interface {
-	// Connect establishes a connection to the database
-	Connect() error
-
-	// Close closes the database connection
-	Close() error
-
-	// GetTableSchema returns the schema of a table
-	GetTableSchema(table string) ([]Column, error)
-
-	// GetRowCount returns the total number of rows in a table
-	GetRowCount(table string) (int64, error)
-
-	// ExtractData extracts data from a table in batches
-	ExtractData(ctx context.Context, table string, columns []Column, batchSize int, offset int64) ([][]interface{}, error)
+	ExtractData(table, outputFile, format string, batchSize int) error
 }
 
 // NewDatabase creates a new database instance based on the configuration
-func NewDatabase(config *Config, stateManager state.Manager) (Database, error) {
-	switch config.Type {
+func NewDatabase(cfg *config.Config, stateManager state.Manager) (Database, error) {
+	switch cfg.Type {
 	case "postgres":
-		return NewPostgresDB(config, stateManager), nil
-	case "duckdb":
-		return NewDuckDB(config, stateManager), nil
-	case "bigquery":
-		return NewBigQueryDB(config, stateManager), nil
-	case "snowflake":
-		return NewSnowflakeDB(config, stateManager), nil
+		return NewPostgres(cfg, stateManager)
 	case "mssql":
-		return NewMSSQL(config, stateManager), nil
+		return NewMSSQL(cfg, stateManager)
+	case "bigquery":
+		return NewBigQuery(cfg, stateManager)
+	case "snowflake":
+		return NewSnowflake(cfg, stateManager)
 	case "databricks":
-		return NewDatabricksDB(config, stateManager), nil
+		return NewDatabricks(cfg, stateManager)
 	default:
-		return nil, fmt.Errorf("unsupported database type: %s", config.Type)
+		return nil, fmt.Errorf("unsupported database type: %s", cfg.Type)
 	}
 }
