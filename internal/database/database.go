@@ -7,14 +7,21 @@ import (
 	"github.com/gerhard-ee/sqlextract/internal/state"
 )
 
-// Database represents a database interface
+// Database defines the interface for database operations
 type Database interface {
+	// ExtractData extracts data from a table and writes it to a file
 	ExtractData(table, outputFile, format string, batchSize int) error
+	// GetTotalRows returns the total number of rows in a table
+	GetTotalRows(table string) (int64, error)
+	// GetColumns returns the column names for a table
+	GetColumns(table string) ([]string, error)
+	// ExtractBatch extracts a batch of rows from a table
+	ExtractBatch(table string, offset, limit int64) ([]map[string]interface{}, error)
 }
 
-// NewDatabase creates a new database instance based on the configuration
-func NewDatabase(cfg *config.Config, stateManager state.Manager) (Database, error) {
-	switch cfg.Type {
+// NewDatabase creates a new database instance based on the type
+func NewDatabase(dbType string, cfg *config.Config, stateManager state.Manager) (Database, error) {
+	switch dbType {
 	case "postgres":
 		return NewPostgres(cfg, stateManager)
 	case "mssql":
@@ -26,6 +33,6 @@ func NewDatabase(cfg *config.Config, stateManager state.Manager) (Database, erro
 	case "databricks":
 		return NewDatabricks(cfg, stateManager)
 	default:
-		return nil, fmt.Errorf("unsupported database type: %s", cfg.Type)
+		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
 }

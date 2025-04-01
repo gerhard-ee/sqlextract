@@ -1,338 +1,280 @@
 package database
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	_ "github.com/denisenkom/go-mssqldb"
+	"github.com/gerhard-ee/sqlextract/internal/config"
 	"github.com/gerhard-ee/sqlextract/internal/state"
+	_ "github.com/microsoft/go-mssqldb"
 )
 
-type MSSQL struct {
-	config *Config
-	db     *sql.DB
-	state  state.Manager
+type MSSQLDB struct {
+	db           *sql.DB
+	config       *config.Config
+	stateManager state.Manager
 }
 
-func NewMSSQL(config *Config, stateManager state.Manager) Database {
-	return &MSSQL{
-		config: config,
-		state:  stateManager,
-	}
-}
+func NewMSSQL(cfg *config.Config, stateManager state.Manager) (Database, error) {
+	connStr := fmt.Sprintf(
+		"sqlserver://%s:%s@%s:%d?database=%s",
+		cfg.Username, cfg.Password,
+		cfg.Host, cfg.Port, cfg.Database,
+	)
 
-func (m *MSSQL) Connect() error {
-	connStr := fmt.Sprintf("server=%s;port=%d;user id=%s;password=%s;database=%s",
-		m.config.Host,
-		m.config.Port,
-		m.config.Username,
-		m.config.Password,
-		m.config.Database)
-
-	db, err := sql.Open("mssql", connStr)
+	db, err := sql.Open("sqlserver", connStr)
 	if err != nil {
-		return fmt.Errorf("failed to open connection: %v", err)
+		return nil, fmt.Errorf("failed to connect to database: %v", err)
 	}
 
 	if err := db.Ping(); err != nil {
-		return fmt.Errorf("failed to ping database: %v", err)
+		return nil, fmt.Errorf("failed to ping database: %v", err)
 	}
 
-	m.db = db
-	return nil
+	return &MSSQLDB{
+		db:           db,
+		config:       cfg,
+		stateManager: stateManager,
+	}, nil
 }
 
-func (m *MSSQL) Close() error {
-	if m.db != nil {
-		return m.db.Close()
-	}
-	return nil
-}
-
-func (m *MSSQL) GetTableSchema(table string) ([]Column, error) {
-	query := `
-		SELECT 
-			COLUMN_NAME,
-			DATA_TYPE
-		FROM INFORMATION_SCHEMA.COLUMNS
-		WHERE TABLE_NAME = @p1
-		ORDER BY ORDINAL_POSITION
-	`
-	if m.config.Schema != "" {
-		query = `
-			SELECT 
-				COLUMN_NAME,
-				DATA_TYPE
-			FROM INFORMATION_SCHEMA.COLUMNS
-			WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2
-			ORDER BY ORDINAL_POSITION
-		`
-	}
-
-	var rows *sql.Rows
-	var err error
-	if m.config.Schema != "" {
-		rows, err = m.db.Query(query, m.config.Schema, table)
-	} else {
-		rows, err = m.db.Query(query, table)
-	}
+func (db *MSSQLDB) ExtractData(table, outputFile, format string, batchSize int) error {
+	// Get current state
+	currentState, err := db.stateManager.GetState(table)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get table schema: %v", err)
-	}
-	defer rows.Close()
-
-	var columns []Column
-	for rows.Next() {
-		var col Column
-		if err := rows.Scan(&col.Name, &col.Type); err != nil {
-			return nil, fmt.Errorf("failed to scan column: %v", err)
-		}
-		columns = append(columns, col)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %v", err)
-	}
-
-	return columns, nil
-}
-
-func (m *MSSQL) GetRowCount(table string) (int64, error) {
-	var query string
-	if m.config.Schema != "" {
-		query = fmt.Sprintf("SELECT COUNT(*) FROM %s.%s", m.config.Schema, table)
-	} else {
-		query = fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
-	}
-
-	var count int64
-	if err := m.db.QueryRow(query).Scan(&count); err != nil {
-		return 0, fmt.Errorf("failed to get row count: %v", err)
-	}
-
-	return count, nil
-}
-
-func (m *MSSQL) ExtractData(ctx context.Context, table string, columns []Column, batchSize int, offset int64) ([][]interface{}, error) {
-	// Get or create state for this extraction
-	jobID := fmt.Sprintf("%s-%s-%d", m.config.Database, table, time.Now().UnixNano())
-	currentState, err := m.state.GetState(ctx, jobID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get state: %v", err)
-	}
-
-	if currentState == nil {
-		// Create new state
+		// Create new state if it doesn't exist
 		currentState = &state.State{
-			JobID:       jobID,
 			Table:       table,
-			LastOffset:  offset,
 			LastUpdated: time.Now(),
 			Status:      "running",
 		}
-		if err := m.state.CreateState(ctx, currentState); err != nil {
-			return nil, fmt.Errorf("failed to create state: %v", err)
+		if err := db.stateManager.CreateState(currentState); err != nil {
+			return fmt.Errorf("failed to create state: %v", err)
 		}
 	}
 
-	// Try to acquire lock
-	locked, err := m.state.LockState(ctx, jobID, 5*time.Minute)
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(filepath.Dir(outputFile), 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %v", err)
+	}
+
+	// Get primary key columns
+	pkColumns, err := db.getPrimaryKeyColumns(table)
 	if err != nil {
-		return nil, fmt.Errorf("failed to acquire lock: %v", err)
-	}
-	if !locked {
-		return nil, fmt.Errorf("another process is already running this extraction")
-	}
-	defer m.state.UnlockState(ctx, jobID)
-
-	// Get primary key columns for ordering
-	pkColumns, err := m.getPrimaryKeyColumns(table)
-	if err != nil {
-		currentState.Status = "failed"
-		currentState.Error = err.Error()
-		m.state.UpdateState(ctx, currentState)
-		return nil, fmt.Errorf("failed to get primary key columns: %v", err)
+		return fmt.Errorf("failed to get primary key columns: %v", err)
 	}
 
-	// Build column list for SELECT
-	var columnNames []string
-	for _, col := range columns {
-		columnNames = append(columnNames, col.Name)
-	}
-
-	// Build WHERE clause for keyset pagination
-	var whereClause string
-	var args []interface{}
-	if currentState.LastValues != nil {
-		// Use last values from state for keyset pagination
-		whereClause = "WHERE "
-		for i, col := range pkColumns {
-			if i > 0 {
-				whereClause += " OR ("
-				for j := 0; j < i; j++ {
-					whereClause += fmt.Sprintf("%s = @p%d AND ", pkColumns[j], j+1)
-				}
-				whereClause += fmt.Sprintf("%s > @p%d)", col, i+1)
-			} else {
-				whereClause += fmt.Sprintf("%s > @p%d", col, i+1)
-			}
-			args = append(args, currentState.LastValues[i])
-		}
-	}
-
-	// Build ORDER BY clause
-	orderBy := "ORDER BY " + strings.Join(pkColumns, ", ")
-
-	// Build the complete query
-	var query string
-	if m.config.Schema != "" {
-		query = fmt.Sprintf(`
-			SELECT %s
-			FROM %s.%s
-			%s
-			%s
-			FETCH NEXT %d ROWS ONLY
-		`, strings.Join(columnNames, ", "), m.config.Schema, table, whereClause, orderBy, batchSize)
-	} else {
-		query = fmt.Sprintf(`
-			SELECT %s
-			FROM %s
-			%s
-			%s
-			FETCH NEXT %d ROWS ONLY
-		`, strings.Join(columnNames, ", "), table, whereClause, orderBy, batchSize)
+	// Build query
+	query := fmt.Sprintf("SELECT * FROM %s", table)
+	if len(pkColumns) > 0 {
+		query += " ORDER BY " + strings.Join(pkColumns, ", ")
 	}
 
 	// Execute query
-	rows, err := m.db.QueryContext(ctx, query, args...)
+	rows, err := db.db.Query(query)
 	if err != nil {
-		currentState.Status = "failed"
-		currentState.Error = err.Error()
-		m.state.UpdateState(ctx, currentState)
-		return nil, fmt.Errorf("failed to execute query: %v", err)
+		return fmt.Errorf("failed to execute query: %v", err)
 	}
 	defer rows.Close()
 
-	var result [][]interface{}
-	var lastValues []interface{}
+	// Get column names
+	columns, err := rows.Columns()
+	if err != nil {
+		return fmt.Errorf("failed to get columns: %v", err)
+	}
+
+	// Create output file
+	file, err := os.Create(outputFile)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %v", err)
+	}
+	defer file.Close()
+
+	// Write header
+	if format == "csv" {
+		if _, err := fmt.Fprintf(file, "%s\n", strings.Join(columns, ",")); err != nil {
+			return fmt.Errorf("failed to write header: %v", err)
+		}
+	}
+
+	// Scan rows
+	values := make([]interface{}, len(columns))
+	valuePtrs := make([]interface{}, len(columns))
+	for i := range values {
+		valuePtrs[i] = &values[i]
+	}
+
+	processedRows := int64(0)
 	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		scanArgs := make([]interface{}, len(columns))
-		for i := range values {
-			scanArgs[i] = &values[i]
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return fmt.Errorf("failed to scan row: %v", err)
 		}
 
-		if err := rows.Scan(scanArgs...); err != nil {
-			currentState.Status = "failed"
-			currentState.Error = err.Error()
-			m.state.UpdateState(ctx, currentState)
-			return nil, fmt.Errorf("failed to scan row: %v", err)
+		// Write row
+		if format == "csv" {
+			rowValues := make([]string, len(columns))
+			for i, v := range values {
+				if v == nil {
+					rowValues[i] = "NULL"
+				} else {
+					rowValues[i] = fmt.Sprintf("%v", v)
+				}
+			}
+			if _, err := fmt.Fprintf(file, "%s\n", strings.Join(rowValues, ",")); err != nil {
+				return fmt.Errorf("failed to write row: %v", err)
+			}
 		}
 
-		result = append(result, values)
-		lastValues = values
+		processedRows++
+		if processedRows%int64(batchSize) == 0 {
+			// Update state
+			if err := db.stateManager.UpdateState(table, processedRows); err != nil {
+				return fmt.Errorf("failed to update state: %v", err)
+			}
+		}
 	}
 
 	if err := rows.Err(); err != nil {
-		currentState.Status = "failed"
-		currentState.Error = err.Error()
-		m.state.UpdateState(ctx, currentState)
-		return nil, fmt.Errorf("error iterating rows: %v", err)
+		return fmt.Errorf("error iterating rows: %v", err)
 	}
 
-	// Update state with last values
-	currentState.LastValues = lastValues
-	currentState.LastUpdated = time.Now()
-	currentState.ProcessedRows += int64(len(result))
-	if err := m.state.UpdateState(ctx, currentState); err != nil {
-		return nil, fmt.Errorf("failed to update state: %v", err)
+	// Update final state
+	if err := db.stateManager.UpdateState(table, processedRows); err != nil {
+		return fmt.Errorf("failed to update final state: %v", err)
 	}
 
-	return result, nil
+	return nil
 }
 
-// getPrimaryKeyColumns returns the primary key columns of a table
-func (m *MSSQL) getPrimaryKeyColumns(table string) ([]string, error) {
+func (db *MSSQLDB) GetTotalRows(table string) (int64, error) {
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
+	var count int64
+	err := db.db.QueryRow(query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get total rows: %v", err)
+	}
+	return count, nil
+}
+
+func (db *MSSQLDB) GetColumns(table string) ([]string, error) {
 	query := `
-		SELECT c.name
-		FROM sys.index_columns ic
-		INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-		INNER JOIN sys.indexes i ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-		WHERE i.is_primary_key = 1
-		AND OBJECT_NAME(ic.object_id) = @p1
-		ORDER BY ic.key_ordinal
+		SELECT column_name
+		FROM information_schema.columns
+		WHERE table_name = @p1
+		ORDER BY ordinal_position;
 	`
 
-	rows, err := m.db.Query(query, table)
+	rows, err := db.db.Query(query, sql.Named("p1", table))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get primary key columns: %v", err)
+		return nil, fmt.Errorf("failed to query columns: %v", err)
 	}
 	defer rows.Close()
 
 	var columns []string
 	for rows.Next() {
-		var col string
-		if err := rows.Scan(&col); err != nil {
+		var column string
+		if err := rows.Scan(&column); err != nil {
 			return nil, fmt.Errorf("failed to scan column: %v", err)
 		}
-		columns = append(columns, col)
+		columns = append(columns, column)
 	}
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating columns: %v", err)
 	}
 
-	if len(columns) == 0 {
-		// If no primary key found, use the first column as a fallback
-		query = `
-			SELECT name
-			FROM sys.columns
-			WHERE object_id = OBJECT_ID(@p1)
-			ORDER BY column_id
-			LIMIT 1
-		`
-		var col string
-		if err := m.db.QueryRow(query, table).Scan(&col); err != nil {
-			return nil, fmt.Errorf("failed to get fallback column: %v", err)
-		}
-		columns = []string{col}
-	}
-
 	return columns, nil
 }
 
-// getLastRowValues returns the values of the primary key columns for the last row in the previous batch
-func (m *MSSQL) getLastRowValues(table string, pkColumns []string, offset int64) ([]interface{}, error) {
-	query := fmt.Sprintf(`
-		SELECT %s
-		FROM %s
-		ORDER BY %s
-		OFFSET %d ROWS
-		FETCH NEXT 1 ROWS ONLY
-	`, strings.Join(pkColumns, ", "), table, strings.Join(pkColumns, ", "), offset-1)
-
-	rows, err := m.db.Query(query)
+func (db *MSSQLDB) ExtractBatch(table string, offset, limit int64) ([]map[string]interface{}, error) {
+	// Get primary key columns for ordering
+	pkColumns, err := db.getPrimaryKeyColumns(table)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get last row values: %v", err)
+		return nil, fmt.Errorf("failed to get primary key columns: %v", err)
+	}
+
+	// Build query
+	query := fmt.Sprintf("SELECT * FROM %s", table)
+	if len(pkColumns) > 0 {
+		query += " ORDER BY " + strings.Join(pkColumns, ", ")
+	}
+	query += fmt.Sprintf(" OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", offset, limit)
+
+	// Execute query
+	rows, err := db.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %v", err)
 	}
 	defer rows.Close()
 
-	if !rows.Next() {
-		return nil, fmt.Errorf("no rows found at offset %d", offset-1)
+	// Get column names
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get columns: %v", err)
 	}
 
-	values := make([]interface{}, len(pkColumns))
-	scanArgs := make([]interface{}, len(pkColumns))
+	// Scan rows
+	values := make([]interface{}, len(columns))
+	valuePtrs := make([]interface{}, len(columns))
 	for i := range values {
-		scanArgs[i] = &values[i]
+		valuePtrs[i] = &values[i]
 	}
 
-	if err := rows.Scan(scanArgs...); err != nil {
-		return nil, fmt.Errorf("failed to scan last row values: %v", err)
+	var result []map[string]interface{}
+	for rows.Next() {
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %v", err)
+		}
+
+		row := make(map[string]interface{})
+		for i, v := range values {
+			row[columns[i]] = v
+		}
+		result = append(result, row)
 	}
 
-	return values, nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %v", err)
+	}
+
+	return result, nil
+}
+
+func (db *MSSQLDB) getPrimaryKeyColumns(table string) ([]string, error) {
+	query := `
+		SELECT c.name
+		FROM sys.indexes i
+		INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id
+			AND i.index_id = ic.index_id
+		INNER JOIN sys.columns c ON ic.object_id = c.object_id
+			AND ic.column_id = c.column_id
+		WHERE i.is_primary_key = 1
+			AND i.object_id = OBJECT_ID(@p1)
+		ORDER BY ic.key_ordinal;
+	`
+
+	rows, err := db.db.Query(query, sql.Named("p1", table))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query primary key columns: %v", err)
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			return nil, fmt.Errorf("failed to scan primary key column: %v", err)
+		}
+		columns = append(columns, column)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating primary key columns: %v", err)
+	}
+
+	return columns, nil
 }

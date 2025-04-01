@@ -21,8 +21,8 @@ type PostgresDB struct {
 
 func NewPostgres(cfg *config.Config, stateManager state.Manager) (Database, error) {
 	connStr := fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-		cfg.Host, cfg.Port, cfg.Username, cfg.Password, cfg.Database,
+		"host=%s port=%d dbname=%s user=%s password=%s sslmode=disable",
+		cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password,
 	)
 
 	db, err := sql.Open("postgres", connStr)
@@ -200,15 +200,107 @@ func (db *PostgresDB) ExtractData(table, outputFile, format string, batchSize in
 	return nil
 }
 
+func (db *PostgresDB) GetTotalRows(table string) (int64, error) {
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
+	var count int64
+	err := db.db.QueryRow(query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get total rows: %v", err)
+	}
+	return count, nil
+}
+
+func (db *PostgresDB) GetColumns(table string) ([]string, error) {
+	query := `
+		SELECT column_name
+		FROM information_schema.columns
+		WHERE table_name = $1
+		ORDER BY ordinal_position;
+	`
+
+	rows, err := db.db.Query(query, table)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query columns: %v", err)
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			return nil, fmt.Errorf("failed to scan column: %v", err)
+		}
+		columns = append(columns, column)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating columns: %v", err)
+	}
+
+	return columns, nil
+}
+
+func (db *PostgresDB) ExtractBatch(table string, offset, limit int64) ([]map[string]interface{}, error) {
+	// Get primary key columns for ordering
+	pkColumns, err := db.getPrimaryKeyColumns(table)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get primary key columns: %v", err)
+	}
+
+	// Build query
+	query := fmt.Sprintf("SELECT * FROM %s", table)
+	if len(pkColumns) > 0 {
+		query += " ORDER BY " + strings.Join(pkColumns, ", ")
+	}
+	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+
+	// Execute query
+	rows, err := db.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %v", err)
+	}
+	defer rows.Close()
+
+	// Get column names
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get columns: %v", err)
+	}
+
+	// Scan rows
+	values := make([]interface{}, len(columns))
+	valuePtrs := make([]interface{}, len(columns))
+	for i := range values {
+		valuePtrs[i] = &values[i]
+	}
+
+	var result []map[string]interface{}
+	for rows.Next() {
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %v", err)
+		}
+
+		row := make(map[string]interface{})
+		for i, v := range values {
+			row[columns[i]] = v
+		}
+		result = append(result, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %v", err)
+	}
+
+	return result, nil
+}
+
 func (db *PostgresDB) getPrimaryKeyColumns(table string) ([]string, error) {
 	query := `
-		SELECT c.column_name
-		FROM information_schema.table_constraints tc
-		JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_name)
-		JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema
-		  AND tc.table_name = c.table_name AND ccu.column_name = c.column_name
-		WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_name = $1
-		ORDER BY c.ordinal_position;
+		SELECT column_name
+		FROM information_schema.columns
+		WHERE table_name = $1
+		AND is_identity = 'YES'
+		ORDER BY ordinal_position;
 	`
 
 	rows, err := db.db.Query(query, table)

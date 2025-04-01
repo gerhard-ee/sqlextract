@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"cloud.google.com/go/bigquery"
-	"google.golang.org/api/iterator"
-	"google.golang.org/api/option"
 
 	"github.com/gerhard-ee/sqlextract/internal/config"
 	"github.com/gerhard-ee/sqlextract/internal/state"
@@ -24,8 +22,7 @@ type BigQueryDB struct {
 
 func NewBigQuery(cfg *config.Config, stateManager state.Manager) (Database, error) {
 	ctx := context.Background()
-
-	client, err := bigquery.NewClient(ctx, cfg.ProjectID, option.WithCredentialsFile(cfg.CredentialsFile))
+	client, err := bigquery.NewClient(ctx, cfg.ProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create BigQuery client: %v", err)
 	}
@@ -58,10 +55,7 @@ func (db *BigQueryDB) ExtractData(table, outputFile, format string, batchSize in
 	}
 
 	// Build query
-	query := fmt.Sprintf("SELECT * FROM %s", table)
-	if db.config.Schema != "" {
-		query = fmt.Sprintf("SELECT * FROM %s.%s", db.config.Schema, table)
-	}
+	query := fmt.Sprintf("SELECT * FROM `%s.%s.%s`", db.config.ProjectID, db.config.Database, table)
 
 	// Execute query
 	ctx := context.Background()
@@ -71,24 +65,9 @@ func (db *BigQueryDB) ExtractData(table, outputFile, format string, batchSize in
 		return fmt.Errorf("failed to execute query: %v", err)
 	}
 
-	// Get schema from query
-	job, err := q.Run(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to run query: %v", err)
-	}
-
-	status, err := job.Wait(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to wait for query: %v", err)
-	}
-
-	if err := status.Err(); err != nil {
-		return fmt.Errorf("query failed: %v", err)
-	}
-
 	// Get column names from the first row
 	var firstRow []bigquery.Value
-	if err := it.Next(&firstRow); err != nil && err != iterator.Done {
+	if err := it.Next(&firstRow); err != nil {
 		return fmt.Errorf("failed to read first row: %v", err)
 	}
 
@@ -127,19 +106,16 @@ func (db *BigQueryDB) ExtractData(table, outputFile, format string, batchSize in
 	// Process remaining rows
 	processedRows := int64(1)
 	for {
-		var row []bigquery.Value
-		err := it.Next(&row)
-		if err == iterator.Done {
-			break
-		}
+		var values []bigquery.Value
+		err := it.Next(&values)
 		if err != nil {
-			return fmt.Errorf("failed to read row: %v", err)
+			break
 		}
 
 		// Write row
 		if format == "csv" {
-			rowValues := make([]string, len(row))
-			for i, v := range row {
+			rowValues := make([]string, len(values))
+			for i, v := range values {
 				if v == nil {
 					rowValues[i] = "NULL"
 				} else {
@@ -166,4 +142,93 @@ func (db *BigQueryDB) ExtractData(table, outputFile, format string, batchSize in
 	}
 
 	return nil
+}
+
+func (db *BigQueryDB) GetTotalRows(table string) (int64, error) {
+	query := fmt.Sprintf("SELECT COUNT(*) as count FROM `%s.%s.%s`", db.config.ProjectID, db.config.Database, table)
+	ctx := context.Background()
+	q := db.client.Query(query)
+	it, err := q.Read(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to execute query: %v", err)
+	}
+
+	var count int64
+	err = it.Next(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get total rows: %v", err)
+	}
+
+	return count, nil
+}
+
+func (db *BigQueryDB) GetColumns(table string) ([]string, error) {
+	query := fmt.Sprintf("SELECT column_name FROM `%s.%s.INFORMATION_SCHEMA.COLUMNS` WHERE table_name = '%s' ORDER BY ordinal_position", db.config.ProjectID, db.config.Database, table)
+	ctx := context.Background()
+	q := db.client.Query(query)
+	it, err := q.Read(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %v", err)
+	}
+
+	var columns []string
+	for {
+		var column string
+		err := it.Next(&column)
+		if err != nil {
+			break
+		}
+		columns = append(columns, column)
+	}
+
+	return columns, nil
+}
+
+func (db *BigQueryDB) ExtractBatch(table string, offset, limit int64) ([]map[string]interface{}, error) {
+	// Build query
+	query := fmt.Sprintf("SELECT * FROM `%s.%s.%s` LIMIT %d OFFSET %d", db.config.ProjectID, db.config.Database, table, limit, offset)
+
+	// Execute query
+	ctx := context.Background()
+	q := db.client.Query(query)
+	it, err := q.Read(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %v", err)
+	}
+
+	// Get column names from the first row
+	var firstRow []bigquery.Value
+	if err := it.Next(&firstRow); err != nil {
+		return nil, fmt.Errorf("failed to read first row: %v", err)
+	}
+
+	columns := make([]string, len(firstRow))
+	for i := range firstRow {
+		columns[i] = fmt.Sprintf("column_%d", i+1)
+	}
+
+	// Create result with first row
+	result := []map[string]interface{}{
+		make(map[string]interface{}),
+	}
+	for i, v := range firstRow {
+		result[0][columns[i]] = v
+	}
+
+	// Scan remaining rows
+	for {
+		var values []bigquery.Value
+		err := it.Next(&values)
+		if err != nil {
+			break
+		}
+
+		row := make(map[string]interface{})
+		for i, v := range values {
+			row[columns[i]] = v
+		}
+		result = append(result, row)
+	}
+
+	return result, nil
 }

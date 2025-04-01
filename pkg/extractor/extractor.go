@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"sqlextract/pkg/database"
+	"github.com/gerhard-ee/sqlextract/internal/database"
 )
 
 type ParquetWriter interface {
