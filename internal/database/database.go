@@ -1,16 +1,42 @@
 package database
 
 import (
+	"context"
 	"fmt"
 )
 
-// Database interface defines the methods that all database implementations must provide
+// Column represents a database column
+type Column struct {
+	Name string
+	Type string
+}
+
+// Config represents database configuration
+type Config struct {
+	Host     string
+	Port     int
+	Username string
+	Password string
+	Database string
+	Schema   string
+}
+
+// Database defines the interface for database operations
 type Database interface {
+	// Connect establishes a connection to the database
 	Connect() error
+
+	// Close closes the database connection
 	Close() error
-	GetTableSchema(tableName string) ([]Column, error)
-	ExtractData(tableName string, columns []Column, batchSize int, offset int64) ([][]interface{}, error)
-	GetRowCount(tableName string) (int64, error)
+
+	// GetTableSchema returns the schema of a table
+	GetTableSchema(table string) ([]Column, error)
+
+	// GetRowCount returns the total number of rows in a table
+	GetRowCount(table string) (int64, error)
+
+	// ExtractData extracts data from a table in batches
+	ExtractData(ctx context.Context, table string, columns []Column, batchSize int, offset int64) ([][]interface{}, error)
 }
 
 // NewDatabase creates a new database instance based on the configuration

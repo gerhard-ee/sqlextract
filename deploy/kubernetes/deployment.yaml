@@ -1,0 +1,132 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sqlextract
+  labels:
+    app: sqlextract
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sqlextract
+  template:
+    metadata:
+      labels:
+        app: sqlextract
+    spec:
+      serviceAccountName: sqlextract
+      containers:
+      - name: sqlextract
+        image: gerhardlazu/sqlextract:latest
+        imagePullPolicy: Always
+        env:
+        - name: KUBERNETES_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: DB_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: sqlextract-config
+              key: DB_TYPE
+        - name: TABLE_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: sqlextract-config
+              key: TABLE_NAME
+        - name: OUTPUT_FILE
+          valueFrom:
+            configMapKeyRef:
+              name: sqlextract-config
+              key: OUTPUT_FILE
+        - name: BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: sqlextract-config
+              key: BATCH_SIZE
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: sqlextract-config
+              key: LOG_LEVEL
+        - name: MAX_RETRIES
+          valueFrom:
+            configMapKeyRef:
+              name: sqlextract-config
+              key: MAX_RETRIES
+        - name: RETRY_DELAY
+          valueFrom:
+            configMapKeyRef:
+              name: sqlextract-config
+              key: RETRY_DELAY
+        - name: TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: sqlextract-config
+              key: TIMEOUT
+        - name: CHECKPOINT_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: sqlextract-config
+              key: CHECKPOINT_INTERVAL
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: host
+        - name: DB_PORT
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: port
+        - name: DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: password
+        - name: DB_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: database
+        - name: DB_SCHEMA
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: schema
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+      volumes:
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: sqlextract-data-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sqlextract-data-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-credentials
+type: Opaque
+data:
+  host: <base64-encoded-host>
+  port: <base64-encoded-port>
+  username: <base64-encoded-username>
+  password: <base64-encoded-password>
+  database: <base64-encoded-database>
+  schema: <base64-encoded-schema>

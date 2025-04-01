@@ -4,19 +4,24 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/bigquery"
+	"github.com/gerhardlazu/sqlextract/internal/state"
+	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 )
 
 type BigQueryDB struct {
 	config *Config
 	client *bigquery.Client
+	state  state.Manager
 }
 
-func NewBigQueryDB(config *Config) *BigQueryDB {
+func NewBigQueryDB(config *Config, stateManager state.Manager) Database {
 	return &BigQueryDB{
 		config: config,
+		state:  stateManager,
 	}
 }
 
@@ -57,34 +62,130 @@ func (db *BigQueryDB) GetTableSchema(tableName string) ([]Column, error) {
 	return columns, nil
 }
 
-func (db *BigQueryDB) ExtractData(tableName string, columns []Column, batchSize int, offset int64) ([][]interface{}, error) {
-	ctx := context.Background()
-	tableRef := db.client.Dataset(db.config.Database).Table(tableName)
-
-	columnNames := make([]string, len(columns))
-	for i, col := range columns {
-		columnNames[i] = col.Name
+func (b *BigQueryDB) ExtractData(ctx context.Context, table string, columns []Column, batchSize int, offset int64) ([][]interface{}, error) {
+	// Get or create state for this extraction
+	jobID := fmt.Sprintf("%s-%s-%d", b.config.Database, table, time.Now().UnixNano())
+	state, err := b.state.GetState(ctx, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get state: %v", err)
 	}
 
-	query := fmt.Sprintf("SELECT %s FROM %s LIMIT %d OFFSET %d",
-		strings.Join(columnNames, ", "),
-		tableRef.FullyQualifiedName(),
-		batchSize,
-		offset)
+	if state == nil {
+		// Create new state
+		state = &state.State{
+			JobID:       jobID,
+			Table:       table,
+			LastOffset:  offset,
+			LastUpdated: time.Now(),
+			Status:      "running",
+		}
+		if err := b.state.CreateState(ctx, state); err != nil {
+			return nil, fmt.Errorf("failed to create state: %v", err)
+		}
+	}
 
-	it, err := db.client.Query(query).Read(ctx)
+	// Try to acquire lock
+	locked, err := b.state.LockState(ctx, jobID, 5*time.Minute)
 	if err != nil {
+		return nil, fmt.Errorf("failed to acquire lock: %v", err)
+	}
+	if !locked {
+		return nil, fmt.Errorf("another process is already running this extraction")
+	}
+	defer b.state.UnlockState(ctx, jobID)
+
+	// Build column list for SELECT
+	var columnNames []string
+	for _, col := range columns {
+		columnNames = append(columnNames, col.Name)
+	}
+
+	// Build WHERE clause for keyset pagination
+	var whereClause string
+	var args []interface{}
+	if state.LastValues != nil {
+		// Use last values from state for keyset pagination
+		whereClause = "WHERE "
+		for i, col := range columns {
+			if i > 0 {
+				whereClause += " OR ("
+				for j := 0; j < i; j++ {
+					whereClause += fmt.Sprintf("%s = @p%d AND ", columns[j].Name, j+1)
+				}
+				whereClause += fmt.Sprintf("%s > @p%d)", col.Name, i+1)
+			} else {
+				whereClause += fmt.Sprintf("%s > @p%d", col.Name, i+1)
+			}
+			args = append(args, state.LastValues[i])
+		}
+	}
+
+	// Build ORDER BY clause
+	orderBy := "ORDER BY " + strings.Join(columnNames, ", ")
+
+	// Build the complete query
+	var query string
+	if b.config.Schema != "" {
+		query = fmt.Sprintf(`
+			SELECT %s
+			FROM %s.%s
+			%s
+			%s
+			LIMIT %d
+		`, strings.Join(columnNames, ", "), b.config.Schema, table, whereClause, orderBy, batchSize)
+	} else {
+		query = fmt.Sprintf(`
+			SELECT %s
+			FROM %s
+			%s
+			%s
+			LIMIT %d
+		`, strings.Join(columnNames, ", "), table, whereClause, orderBy, batchSize)
+	}
+
+	// Execute query
+	q := b.client.Query(query)
+	q.Parameters = make([]bigquery.QueryParameter, len(args))
+	for i, arg := range args {
+		q.Parameters[i] = bigquery.QueryParameter{
+			Name:  fmt.Sprintf("p%d", i+1),
+			Value: arg,
+		}
+	}
+
+	it, err := q.Read(ctx)
+	if err != nil {
+		state.Status = "failed"
+		state.Error = err.Error()
+		b.state.UpdateState(ctx, state)
 		return nil, fmt.Errorf("failed to execute query: %v", err)
 	}
 
 	var result [][]interface{}
+	var lastValues []interface{}
 	for {
-		var row []interface{}
-		err := it.Next(&row)
-		if err != nil {
+		var values []interface{}
+		err := it.Next(&values)
+		if err == iterator.Done {
 			break
 		}
-		result = append(result, row)
+		if err != nil {
+			state.Status = "failed"
+			state.Error = err.Error()
+			b.state.UpdateState(ctx, state)
+			return nil, fmt.Errorf("failed to read row: %v", err)
+		}
+
+		result = append(result, values)
+		lastValues = values
+	}
+
+	// Update state with last values
+	state.LastValues = lastValues
+	state.LastUpdated = time.Now()
+	state.ProcessedRows += int64(len(result))
+	if err := b.state.UpdateState(ctx, state); err != nil {
+		return nil, fmt.Errorf("failed to update state: %v", err)
 	}
 
 	return result, nil
