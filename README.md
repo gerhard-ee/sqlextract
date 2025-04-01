@@ -21,13 +21,13 @@ A powerful CLI tool for extracting data from SQL databases with support for resu
 ### Using Go Install
 
 ```bash
-go install github.com/gerhardlazu/sqlextract@latest
+go install github.com/gerhard-ee/sqlextract@latest
 ```
 
 ### Building from Source
 
 ```bash
-git clone https://github.com/gerhardlazu/sqlextract.git
+git clone https://github.com/gerhard-ee/sqlextract.git
 cd sqlextract
 go build -o sqlextract cmd/sqlextract/main.go
 ```
@@ -35,7 +35,7 @@ go build -o sqlextract cmd/sqlextract/main.go
 ### Using Docker
 
 ```bash
-docker pull gerhardlazu/sqlextract:latest
+docker pull gerhard-ee/sqlextract:latest
 ```
 
 ## Usage
@@ -92,7 +92,7 @@ sqlextract \
 ### Building from Source
 
 ```bash
-git clone https://github.com/gerhardlazu/sqlextract.git
+git clone https://github.com/gerhard-ee/sqlextract.git
 cd sqlextract
 go build ./...
 ```

@@ -3,23 +3,9 @@ package database
 import (
 	"context"
 	"fmt"
+
+	"github.com/gerhard-ee/sqlextract/internal/state"
 )
-
-// Column represents a database column
-type Column struct {
-	Name string
-	Type string
-}
-
-// Config represents database configuration
-type Config struct {
-	Host     string
-	Port     int
-	Username string
-	Password string
-	Database string
-	Schema   string
-}
 
 // Database defines the interface for database operations
 type Database interface {
@@ -40,20 +26,20 @@ type Database interface {
 }
 
 // NewDatabase creates a new database instance based on the configuration
-func NewDatabase(config *Config) (Database, error) {
+func NewDatabase(config *Config, stateManager state.Manager) (Database, error) {
 	switch config.Type {
 	case "postgres":
-		return NewPostgresDB(config), nil
+		return NewPostgresDB(config, stateManager), nil
 	case "duckdb":
-		return NewDuckDB(config), nil
+		return NewDuckDB(config, stateManager), nil
 	case "bigquery":
-		return NewBigQueryDB(config), nil
+		return NewBigQueryDB(config, stateManager), nil
 	case "snowflake":
-		return NewSnowflake(config), nil
-	case "databricks":
-		return NewDatabricks(config), nil
+		return NewSnowflakeDB(config, stateManager), nil
 	case "mssql":
-		return NewMSSQL(config), nil
+		return NewMSSQL(config, stateManager), nil
+	case "databricks":
+		return NewDatabricksDB(config, stateManager), nil
 	default:
 		return nil, fmt.Errorf("unsupported database type: %s", config.Type)
 	}

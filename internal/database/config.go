@@ -1,6 +1,6 @@
 package database
 
-// Config holds the configuration for database connections
+// Config represents database configuration
 type Config struct {
 	Type            string
 	Host            string
@@ -11,10 +11,8 @@ type Config struct {
 	Schema          string
 	ProjectID       string
 	CredentialsFile string
-
-	// Cloud-specific fields
-	Warehouse string // For Snowflake
-	Catalog   string // For Databricks
+	Warehouse       string
+	Catalog         string
 }
 
 // Column represents a database column

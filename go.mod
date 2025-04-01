@@ -1,4 +1,4 @@
-module github.com/gerhardlazu/sqlextract
+module github.com/gerhard-ee/sqlextract
 
 go 1.24
 

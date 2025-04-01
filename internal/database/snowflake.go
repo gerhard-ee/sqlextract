@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gerhardlazu/sqlextract/internal/state"
-	sf "github.com/snowflakedb/gosnowflake"
+	"github.com/gerhard-ee/sqlextract/internal/state"
+	_ "github.com/snowflakedb/gosnowflake"
 )
 
 type SnowflakeDB struct {
@@ -25,17 +25,13 @@ func NewSnowflakeDB(config *Config, stateManager state.Manager) Database {
 }
 
 func (db *SnowflakeDB) Connect() error {
-	dsn, err := sf.DSN(&sf.Config{
-		Account:   db.config.Host,
-		User:      db.config.Username,
-		Password:  db.config.Password,
-		Database:  db.config.Database,
-		Warehouse: db.config.Warehouse,
-		Schema:    db.config.Schema,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create Snowflake DSN: %v", err)
-	}
+	dsn := fmt.Sprintf("%s:%s@%s/%s/%s?warehouse=%s",
+		db.config.Username,
+		db.config.Password,
+		db.config.Host,
+		db.config.Database,
+		db.config.Schema,
+		db.config.Warehouse)
 
 	conn, err := sql.Open("snowflake", dsn)
 	if err != nil {
@@ -78,37 +74,37 @@ func (db *SnowflakeDB) GetTableSchema(tableName string) ([]Column, error) {
 	return columns, nil
 }
 
-func (s *SnowflakeDB) ExtractData(ctx context.Context, table string, columns []Column, batchSize int, offset int64) ([][]interface{}, error) {
+func (db *SnowflakeDB) ExtractData(ctx context.Context, table string, columns []Column, batchSize int, offset int64) ([][]interface{}, error) {
 	// Get or create state for this extraction
-	jobID := fmt.Sprintf("%s-%s-%d", s.config.Database, table, time.Now().UnixNano())
-	state, err := s.state.GetState(ctx, jobID)
+	jobID := fmt.Sprintf("%s-%s-%d", db.config.Database, table, time.Now().UnixNano())
+	currentState, err := db.state.GetState(ctx, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get state: %v", err)
 	}
 
-	if state == nil {
+	if currentState == nil {
 		// Create new state
-		state = &state.State{
+		currentState = &state.State{
 			JobID:       jobID,
 			Table:       table,
 			LastOffset:  offset,
 			LastUpdated: time.Now(),
 			Status:      "running",
 		}
-		if err := s.state.CreateState(ctx, state); err != nil {
+		if err := db.state.CreateState(ctx, currentState); err != nil {
 			return nil, fmt.Errorf("failed to create state: %v", err)
 		}
 	}
 
 	// Try to acquire lock
-	locked, err := s.state.LockState(ctx, jobID, 5*time.Minute)
+	locked, err := db.state.LockState(ctx, jobID, 5*time.Minute)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire lock: %v", err)
 	}
 	if !locked {
 		return nil, fmt.Errorf("another process is already running this extraction")
 	}
-	defer s.state.UnlockState(ctx, jobID)
+	defer db.state.UnlockState(ctx, jobID)
 
 	// Build column list for SELECT
 	var columnNames []string
@@ -119,7 +115,7 @@ func (s *SnowflakeDB) ExtractData(ctx context.Context, table string, columns []C
 	// Build WHERE clause for keyset pagination
 	var whereClause string
 	var args []interface{}
-	if state.LastValues != nil {
+	if currentState.LastValues != nil {
 		// Use last values from state for keyset pagination
 		whereClause = "WHERE "
 		for i, col := range columns {
@@ -132,7 +128,7 @@ func (s *SnowflakeDB) ExtractData(ctx context.Context, table string, columns []C
 			} else {
 				whereClause += fmt.Sprintf("%s > ?", col.Name)
 			}
-			args = append(args, state.LastValues[i])
+			args = append(args, currentState.LastValues[i])
 		}
 	}
 
@@ -140,31 +136,20 @@ func (s *SnowflakeDB) ExtractData(ctx context.Context, table string, columns []C
 	orderBy := "ORDER BY " + strings.Join(columnNames, ", ")
 
 	// Build the complete query
-	var query string
-	if s.config.Schema != "" {
-		query = fmt.Sprintf(`
-			SELECT %s
-			FROM %s.%s
-			%s
-			%s
-			LIMIT %d
-		`, strings.Join(columnNames, ", "), s.config.Schema, table, whereClause, orderBy, batchSize)
-	} else {
-		query = fmt.Sprintf(`
-			SELECT %s
-			FROM %s
-			%s
-			%s
-			LIMIT %d
-		`, strings.Join(columnNames, ", "), table, whereClause, orderBy, batchSize)
-	}
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM %s
+		%s
+		%s
+		LIMIT %d
+	`, strings.Join(columnNames, ", "), table, whereClause, orderBy, batchSize)
 
 	// Execute query
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := db.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		state.Status = "failed"
-		state.Error = err.Error()
-		s.state.UpdateState(ctx, state)
+		currentState.Status = "failed"
+		currentState.Error = err.Error()
+		db.state.UpdateState(ctx, currentState)
 		return nil, fmt.Errorf("failed to execute query: %v", err)
 	}
 	defer rows.Close()
@@ -179,9 +164,9 @@ func (s *SnowflakeDB) ExtractData(ctx context.Context, table string, columns []C
 		}
 
 		if err := rows.Scan(scanArgs...); err != nil {
-			state.Status = "failed"
-			state.Error = err.Error()
-			s.state.UpdateState(ctx, state)
+			currentState.Status = "failed"
+			currentState.Error = err.Error()
+			db.state.UpdateState(ctx, currentState)
 			return nil, fmt.Errorf("failed to scan row: %v", err)
 		}
 
@@ -189,18 +174,11 @@ func (s *SnowflakeDB) ExtractData(ctx context.Context, table string, columns []C
 		lastValues = values
 	}
 
-	if err := rows.Err(); err != nil {
-		state.Status = "failed"
-		state.Error = err.Error()
-		s.state.UpdateState(ctx, state)
-		return nil, fmt.Errorf("error iterating rows: %v", err)
-	}
-
 	// Update state with last values
-	state.LastValues = lastValues
-	state.LastUpdated = time.Now()
-	state.ProcessedRows += int64(len(result))
-	if err := s.state.UpdateState(ctx, state); err != nil {
+	currentState.LastValues = lastValues
+	currentState.LastUpdated = time.Now()
+	currentState.ProcessedRows += int64(len(result))
+	if err := db.state.UpdateState(ctx, currentState); err != nil {
 		return nil, fmt.Errorf("failed to update state: %v", err)
 	}
 

@@ -65,21 +65,21 @@ func (db *BigQueryDB) GetTableSchema(tableName string) ([]Column, error) {
 func (b *BigQueryDB) ExtractData(ctx context.Context, table string, columns []Column, batchSize int, offset int64) ([][]interface{}, error) {
 	// Get or create state for this extraction
 	jobID := fmt.Sprintf("%s-%s-%d", b.config.Database, table, time.Now().UnixNano())
-	state, err := b.state.GetState(ctx, jobID)
+	currentState, err := b.state.GetState(ctx, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get state: %v", err)
 	}
 
-	if state == nil {
+	if currentState == nil {
 		// Create new state
-		state = &state.State{
+		currentState = &state.State{
 			JobID:       jobID,
 			Table:       table,
 			LastOffset:  offset,
 			LastUpdated: time.Now(),
 			Status:      "running",
 		}
-		if err := b.state.CreateState(ctx, state); err != nil {
+		if err := b.state.CreateState(ctx, currentState); err != nil {
 			return nil, fmt.Errorf("failed to create state: %v", err)
 		}
 	}
@@ -103,7 +103,7 @@ func (b *BigQueryDB) ExtractData(ctx context.Context, table string, columns []Co
 	// Build WHERE clause for keyset pagination
 	var whereClause string
 	var args []interface{}
-	if state.LastValues != nil {
+	if currentState.LastValues != nil {
 		// Use last values from state for keyset pagination
 		whereClause = "WHERE "
 		for i, col := range columns {
@@ -116,7 +116,7 @@ func (b *BigQueryDB) ExtractData(ctx context.Context, table string, columns []Co
 			} else {
 				whereClause += fmt.Sprintf("%s > @p%d", col.Name, i+1)
 			}
-			args = append(args, state.LastValues[i])
+			args = append(args, currentState.LastValues[i])
 		}
 	}
 
@@ -155,9 +155,9 @@ func (b *BigQueryDB) ExtractData(ctx context.Context, table string, columns []Co
 
 	it, err := q.Read(ctx)
 	if err != nil {
-		state.Status = "failed"
-		state.Error = err.Error()
-		b.state.UpdateState(ctx, state)
+		currentState.Status = "failed"
+		currentState.Error = err.Error()
+		b.state.UpdateState(ctx, currentState)
 		return nil, fmt.Errorf("failed to execute query: %v", err)
 	}
 
@@ -170,9 +170,9 @@ func (b *BigQueryDB) ExtractData(ctx context.Context, table string, columns []Co
 			break
 		}
 		if err != nil {
-			state.Status = "failed"
-			state.Error = err.Error()
-			b.state.UpdateState(ctx, state)
+			currentState.Status = "failed"
+			currentState.Error = err.Error()
+			b.state.UpdateState(ctx, currentState)
 			return nil, fmt.Errorf("failed to read row: %v", err)
 		}
 
@@ -181,10 +181,10 @@ func (b *BigQueryDB) ExtractData(ctx context.Context, table string, columns []Co
 	}
 
 	// Update state with last values
-	state.LastValues = lastValues
-	state.LastUpdated = time.Now()
-	state.ProcessedRows += int64(len(result))
-	if err := b.state.UpdateState(ctx, state); err != nil {
+	currentState.LastValues = lastValues
+	currentState.LastUpdated = time.Now()
+	currentState.ProcessedRows += int64(len(result))
+	if err := b.state.UpdateState(ctx, currentState); err != nil {
 		return nil, fmt.Errorf("failed to update state: %v", err)
 	}
 

@@ -2,6 +2,8 @@ package database
 
 import (
 	"testing"
+
+	"github.com/gerhard-ee/sqlextract/internal/state"
 )
 
 func TestPostgresDB(t *testing.T) {
@@ -14,7 +16,8 @@ func TestPostgresDB(t *testing.T) {
 		Schema:   "public",
 	}
 
-	db := NewPostgresDB(config)
+	stateManager := state.NewMemoryManager()
+	db := NewPostgresDB(config, stateManager)
 	if db == nil {
 		t.Error("Expected non-nil PostgresDB instance")
 	}
@@ -25,7 +28,8 @@ func TestDuckDB(t *testing.T) {
 		Database: "test.db",
 	}
 
-	db := NewDuckDB(config)
+	stateManager := state.NewMemoryManager()
+	db := NewDuckDB(config, stateManager)
 	if db == nil {
 		t.Error("Expected non-nil DuckDB instance")
 	}
@@ -38,7 +42,8 @@ func TestBigQueryDB(t *testing.T) {
 		CredentialsFile: "credentials.json",
 	}
 
-	db := NewBigQueryDB(config)
+	stateManager := state.NewMemoryManager()
+	db := NewBigQueryDB(config, stateManager)
 	if db == nil {
 		t.Error("Expected non-nil BigQueryDB instance")
 	}
@@ -54,7 +59,8 @@ func TestSnowflakeDB(t *testing.T) {
 		Warehouse: "compute_wh",
 	}
 
-	db := NewSnowflake(config)
+	stateManager := state.NewMemoryManager()
+	db := NewSnowflakeDB(config, stateManager)
 	if db == nil {
 		t.Fatal("Failed to create Snowflake database instance")
 	}
@@ -70,7 +76,8 @@ func TestDatabricksDB(t *testing.T) {
 		Catalog:  "test_catalog",
 	}
 
-	db := NewDatabricks(config)
+	stateManager := state.NewMemoryManager()
+	db := NewDatabricksDB(config, stateManager)
 	if db == nil {
 		t.Fatal("Failed to create Databricks database instance")
 	}
@@ -86,7 +93,8 @@ func TestMSSQLDB(t *testing.T) {
 		Schema:   "dbo",
 	}
 
-	db := NewMSSQL(config)
+	stateManager := state.NewMemoryManager()
+	db := NewMSSQL(config, stateManager)
 	if db == nil {
 		t.Fatal("Failed to create SQL Server database instance")
 	}

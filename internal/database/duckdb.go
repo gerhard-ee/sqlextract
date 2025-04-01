@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gerhardlazu/sqlextract/internal/state"
+	"github.com/gerhard-ee/sqlextract/internal/state"
 	_ "github.com/marcboeker/go-duckdb"
 )
 
@@ -71,21 +71,21 @@ func (db *DuckDB) GetTableSchema(tableName string) ([]Column, error) {
 func (d *DuckDB) ExtractData(ctx context.Context, table string, columns []Column, batchSize int, offset int64) ([][]interface{}, error) {
 	// Get or create state for this extraction
 	jobID := fmt.Sprintf("%s-%s-%d", d.config.Database, table, time.Now().UnixNano())
-	state, err := d.state.GetState(ctx, jobID)
+	currentState, err := d.state.GetState(ctx, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get state: %v", err)
 	}
 
-	if state == nil {
+	if currentState == nil {
 		// Create new state
-		state = &state.State{
+		currentState = &state.State{
 			JobID:       jobID,
 			Table:       table,
 			LastOffset:  offset,
 			LastUpdated: time.Now(),
 			Status:      "running",
 		}
-		if err := d.state.CreateState(ctx, state); err != nil {
+		if err := d.state.CreateState(ctx, currentState); err != nil {
 			return nil, fmt.Errorf("failed to create state: %v", err)
 		}
 	}
@@ -109,7 +109,7 @@ func (d *DuckDB) ExtractData(ctx context.Context, table string, columns []Column
 	// Build WHERE clause for keyset pagination
 	var whereClause string
 	var args []interface{}
-	if state.LastValues != nil {
+	if currentState.LastValues != nil {
 		// Use last values from state for keyset pagination
 		whereClause = "WHERE "
 		for i, col := range columns {
@@ -122,7 +122,7 @@ func (d *DuckDB) ExtractData(ctx context.Context, table string, columns []Column
 			} else {
 				whereClause += fmt.Sprintf("%s > ?", col.Name)
 			}
-			args = append(args, state.LastValues[i])
+			args = append(args, currentState.LastValues[i])
 		}
 	}
 
@@ -152,9 +152,9 @@ func (d *DuckDB) ExtractData(ctx context.Context, table string, columns []Column
 	// Execute query
 	rows, err := d.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		state.Status = "failed"
-		state.Error = err.Error()
-		d.state.UpdateState(ctx, state)
+		currentState.Status = "failed"
+		currentState.Error = err.Error()
+		d.state.UpdateState(ctx, currentState)
 		return nil, fmt.Errorf("failed to execute query: %v", err)
 	}
 	defer rows.Close()
@@ -169,9 +169,9 @@ func (d *DuckDB) ExtractData(ctx context.Context, table string, columns []Column
 		}
 
 		if err := rows.Scan(scanArgs...); err != nil {
-			state.Status = "failed"
-			state.Error = err.Error()
-			d.state.UpdateState(ctx, state)
+			currentState.Status = "failed"
+			currentState.Error = err.Error()
+			d.state.UpdateState(ctx, currentState)
 			return nil, fmt.Errorf("failed to scan row: %v", err)
 		}
 
@@ -180,17 +180,17 @@ func (d *DuckDB) ExtractData(ctx context.Context, table string, columns []Column
 	}
 
 	if err := rows.Err(); err != nil {
-		state.Status = "failed"
-		state.Error = err.Error()
-		d.state.UpdateState(ctx, state)
+		currentState.Status = "failed"
+		currentState.Error = err.Error()
+		d.state.UpdateState(ctx, currentState)
 		return nil, fmt.Errorf("error iterating rows: %v", err)
 	}
 
 	// Update state with last values
-	state.LastValues = lastValues
-	state.LastUpdated = time.Now()
-	state.ProcessedRows += int64(len(result))
-	if err := d.state.UpdateState(ctx, state); err != nil {
+	currentState.LastValues = lastValues
+	currentState.LastUpdated = time.Now()
+	currentState.ProcessedRows += int64(len(result))
+	if err := d.state.UpdateState(ctx, currentState); err != nil {
 		return nil, fmt.Errorf("failed to update state: %v", err)
 	}
 

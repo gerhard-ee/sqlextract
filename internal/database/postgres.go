@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gerhardlazu/sqlextract/internal/state"
+	"github.com/gerhard-ee/sqlextract/internal/state"
 	_ "github.com/lib/pq"
 )
 
@@ -78,21 +78,21 @@ func (db *PostgresDB) GetTableSchema(tableName string) ([]Column, error) {
 func (p *PostgresDB) ExtractData(ctx context.Context, table string, columns []Column, batchSize int, offset int64) ([][]interface{}, error) {
 	// Get or create state for this extraction
 	jobID := fmt.Sprintf("%s-%s-%d", p.config.Database, table, time.Now().UnixNano())
-	state, err := p.state.GetState(ctx, jobID)
+	currentState, err := p.state.GetState(ctx, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get state: %v", err)
 	}
 
-	if state == nil {
+	if currentState == nil {
 		// Create new state
-		state = &state.State{
+		currentState = &state.State{
 			JobID:       jobID,
 			Table:       table,
 			LastOffset:  offset,
 			LastUpdated: time.Now(),
 			Status:      "running",
 		}
-		if err := p.state.CreateState(ctx, state); err != nil {
+		if err := p.state.CreateState(ctx, currentState); err != nil {
 			return nil, fmt.Errorf("failed to create state: %v", err)
 		}
 	}
@@ -116,7 +116,7 @@ func (p *PostgresDB) ExtractData(ctx context.Context, table string, columns []Co
 	// Build WHERE clause for keyset pagination
 	var whereClause string
 	var args []interface{}
-	if state.LastValues != nil {
+	if currentState.LastValues != nil {
 		// Use last values from state for keyset pagination
 		whereClause = "WHERE "
 		for i, col := range columns {
@@ -129,7 +129,7 @@ func (p *PostgresDB) ExtractData(ctx context.Context, table string, columns []Co
 			} else {
 				whereClause += fmt.Sprintf("%s > $%d", col.Name, i+1)
 			}
-			args = append(args, state.LastValues[i])
+			args = append(args, currentState.LastValues[i])
 		}
 	}
 
@@ -159,9 +159,9 @@ func (p *PostgresDB) ExtractData(ctx context.Context, table string, columns []Co
 	// Execute query
 	rows, err := p.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		state.Status = "failed"
-		state.Error = err.Error()
-		p.state.UpdateState(ctx, state)
+		currentState.Status = "failed"
+		currentState.Error = err.Error()
+		p.state.UpdateState(ctx, currentState)
 		return nil, fmt.Errorf("failed to execute query: %v", err)
 	}
 	defer rows.Close()
@@ -176,9 +176,9 @@ func (p *PostgresDB) ExtractData(ctx context.Context, table string, columns []Co
 		}
 
 		if err := rows.Scan(scanArgs...); err != nil {
-			state.Status = "failed"
-			state.Error = err.Error()
-			p.state.UpdateState(ctx, state)
+			currentState.Status = "failed"
+			currentState.Error = err.Error()
+			p.state.UpdateState(ctx, currentState)
 			return nil, fmt.Errorf("failed to scan row: %v", err)
 		}
 
@@ -187,17 +187,17 @@ func (p *PostgresDB) ExtractData(ctx context.Context, table string, columns []Co
 	}
 
 	if err := rows.Err(); err != nil {
-		state.Status = "failed"
-		state.Error = err.Error()
-		p.state.UpdateState(ctx, state)
+		currentState.Status = "failed"
+		currentState.Error = err.Error()
+		p.state.UpdateState(ctx, currentState)
 		return nil, fmt.Errorf("error iterating rows: %v", err)
 	}
 
 	// Update state with last values
-	state.LastValues = lastValues
-	state.LastUpdated = time.Now()
-	state.ProcessedRows += int64(len(result))
-	if err := p.state.UpdateState(ctx, state); err != nil {
+	currentState.LastValues = lastValues
+	currentState.LastUpdated = time.Now()
+	currentState.ProcessedRows += int64(len(result))
+	if err := p.state.UpdateState(ctx, currentState); err != nil {
 		return nil, fmt.Errorf("failed to update state: %v", err)
 	}
 

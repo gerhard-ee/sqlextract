@@ -50,6 +50,7 @@ type MemoryManager struct {
 	locks  map[string]time.Time
 }
 
+// NewMemoryManager creates a new in-memory state manager
 func NewMemoryManager() *MemoryManager {
 	return &MemoryManager{
 		states: make(map[string]*State),

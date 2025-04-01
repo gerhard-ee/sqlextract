@@ -8,7 +8,7 @@ import (
 	"time"
 
 	_ "github.com/denisenkom/go-mssqldb"
-	"github.com/gerhardlazu/sqlextract/internal/state"
+	"github.com/gerhard-ee/sqlextract/internal/state"
 )
 
 type MSSQL struct {
@@ -119,21 +119,21 @@ func (m *MSSQL) GetRowCount(table string) (int64, error) {
 func (m *MSSQL) ExtractData(ctx context.Context, table string, columns []Column, batchSize int, offset int64) ([][]interface{}, error) {
 	// Get or create state for this extraction
 	jobID := fmt.Sprintf("%s-%s-%d", m.config.Database, table, time.Now().UnixNano())
-	state, err := m.state.GetState(ctx, jobID)
+	currentState, err := m.state.GetState(ctx, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get state: %v", err)
 	}
 
-	if state == nil {
+	if currentState == nil {
 		// Create new state
-		state = &state.State{
+		currentState = &state.State{
 			JobID:       jobID,
 			Table:       table,
 			LastOffset:  offset,
 			LastUpdated: time.Now(),
 			Status:      "running",
 		}
-		if err := m.state.CreateState(ctx, state); err != nil {
+		if err := m.state.CreateState(ctx, currentState); err != nil {
 			return nil, fmt.Errorf("failed to create state: %v", err)
 		}
 	}
@@ -151,9 +151,9 @@ func (m *MSSQL) ExtractData(ctx context.Context, table string, columns []Column,
 	// Get primary key columns for ordering
 	pkColumns, err := m.getPrimaryKeyColumns(table)
 	if err != nil {
-		state.Status = "failed"
-		state.Error = err.Error()
-		m.state.UpdateState(ctx, state)
+		currentState.Status = "failed"
+		currentState.Error = err.Error()
+		m.state.UpdateState(ctx, currentState)
 		return nil, fmt.Errorf("failed to get primary key columns: %v", err)
 	}
 
@@ -166,7 +166,7 @@ func (m *MSSQL) ExtractData(ctx context.Context, table string, columns []Column,
 	// Build WHERE clause for keyset pagination
 	var whereClause string
 	var args []interface{}
-	if state.LastValues != nil {
+	if currentState.LastValues != nil {
 		// Use last values from state for keyset pagination
 		whereClause = "WHERE "
 		for i, col := range pkColumns {
@@ -179,7 +179,7 @@ func (m *MSSQL) ExtractData(ctx context.Context, table string, columns []Column,
 			} else {
 				whereClause += fmt.Sprintf("%s > @p%d", col, i+1)
 			}
-			args = append(args, state.LastValues[i])
+			args = append(args, currentState.LastValues[i])
 		}
 	}
 
@@ -209,9 +209,9 @@ func (m *MSSQL) ExtractData(ctx context.Context, table string, columns []Column,
 	// Execute query
 	rows, err := m.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		state.Status = "failed"
-		state.Error = err.Error()
-		m.state.UpdateState(ctx, state)
+		currentState.Status = "failed"
+		currentState.Error = err.Error()
+		m.state.UpdateState(ctx, currentState)
 		return nil, fmt.Errorf("failed to execute query: %v", err)
 	}
 	defer rows.Close()
@@ -226,9 +226,9 @@ func (m *MSSQL) ExtractData(ctx context.Context, table string, columns []Column,
 		}
 
 		if err := rows.Scan(scanArgs...); err != nil {
-			state.Status = "failed"
-			state.Error = err.Error()
-			m.state.UpdateState(ctx, state)
+			currentState.Status = "failed"
+			currentState.Error = err.Error()
+			m.state.UpdateState(ctx, currentState)
 			return nil, fmt.Errorf("failed to scan row: %v", err)
 		}
 
@@ -237,17 +237,17 @@ func (m *MSSQL) ExtractData(ctx context.Context, table string, columns []Column,
 	}
 
 	if err := rows.Err(); err != nil {
-		state.Status = "failed"
-		state.Error = err.Error()
-		m.state.UpdateState(ctx, state)
+		currentState.Status = "failed"
+		currentState.Error = err.Error()
+		m.state.UpdateState(ctx, currentState)
 		return nil, fmt.Errorf("error iterating rows: %v", err)
 	}
 
 	// Update state with last values
-	state.LastValues = lastValues
-	state.LastUpdated = time.Now()
-	state.ProcessedRows += int64(len(result))
-	if err := m.state.UpdateState(ctx, state); err != nil {
+	currentState.LastValues = lastValues
+	currentState.LastUpdated = time.Now()
+	currentState.ProcessedRows += int64(len(result))
+	if err := m.state.UpdateState(ctx, currentState); err != nil {
 		return nil, fmt.Errorf("failed to update state: %v", err)
 	}
 
