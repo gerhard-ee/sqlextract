@@ -23,6 +23,12 @@ jobs:
             **/go.sum
             **/go.mod
 
+      - name: Clean Go module cache
+        run: |
+          sudo rm -rf ~/.cache/go-build
+          sudo rm -rf $(go env GOMODCACHE)
+          go clean -modcache
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v4
         with:
