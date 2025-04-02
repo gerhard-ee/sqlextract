@@ -22,7 +22,7 @@ type PostgresDB struct {
 func NewPostgres(cfg *config.Config, stateManager state.Manager) (Database, error) {
 	connStr := fmt.Sprintf(
 		"host=%s port=%d dbname=%s user=%s password=%s sslmode=disable",
-		cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password,
+		cfg.Host, cfg.Port, cfg.Database, cfg.User, cfg.Password,
 	)
 
 	db, err := sql.Open("postgres", connStr)
@@ -45,7 +45,7 @@ func (db *PostgresDB) Connect() error {
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 		db.config.Host,
 		db.config.Port,
-		db.config.Username,
+		db.config.User,
 		db.config.Password,
 		db.config.Database)
 
@@ -92,7 +92,7 @@ func (db *PostgresDB) GetTableSchema(tableName string) ([]Column, error) {
 	return columns, nil
 }
 
-func (db *PostgresDB) ExtractData(table, outputFile, format string, batchSize int) error {
+func (db *PostgresDB) ExtractData(table, outputFile, format string, batchSize int, keyColumns, whereClause string) error {
 	// Get current state
 	currentState, err := db.stateManager.GetState(table)
 	if err != nil {
@@ -112,27 +112,14 @@ func (db *PostgresDB) ExtractData(table, outputFile, format string, batchSize in
 		return fmt.Errorf("failed to create output directory: %v", err)
 	}
 
-	// Get primary key columns
-	pkColumns, err := db.getPrimaryKeyColumns(table)
+	// Get total rows
+	totalRows, err := db.GetTotalRows(table)
 	if err != nil {
-		return fmt.Errorf("failed to get primary key columns: %v", err)
+		return fmt.Errorf("failed to get total rows: %v", err)
 	}
 
-	// Build query
-	query := fmt.Sprintf("SELECT * FROM %s", table)
-	if len(pkColumns) > 0 {
-		query += " ORDER BY " + strings.Join(pkColumns, ", ")
-	}
-
-	// Execute query
-	rows, err := db.db.Query(query)
-	if err != nil {
-		return fmt.Errorf("failed to execute query: %v", err)
-	}
-	defer rows.Close()
-
-	// Get column names
-	columns, err := rows.Columns()
+	// Get columns
+	columns, err := db.GetColumns(table)
 	if err != nil {
 		return fmt.Errorf("failed to get columns: %v", err)
 	}
@@ -144,60 +131,90 @@ func (db *PostgresDB) ExtractData(table, outputFile, format string, batchSize in
 	}
 	defer file.Close()
 
-	// Write header
+	// Write header if CSV format
 	if format == "csv" {
 		if _, err := fmt.Fprintf(file, "%s\n", strings.Join(columns, ",")); err != nil {
 			return fmt.Errorf("failed to write header: %v", err)
 		}
 	}
 
-	// Scan rows
-	values := make([]interface{}, len(columns))
-	valuePtrs := make([]interface{}, len(columns))
-	for i := range values {
-		valuePtrs[i] = &values[i]
-	}
-
+	// Process data in batches
 	processedRows := int64(0)
-	for rows.Next() {
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return fmt.Errorf("failed to scan row: %v", err)
+	for offset := int64(0); offset < totalRows; offset += int64(batchSize) {
+		rows, err := db.ExtractBatch(table, offset, int64(batchSize), keyColumns, whereClause)
+		if err != nil {
+			return fmt.Errorf("failed to extract batch: %v", err)
 		}
 
-		// Write row
-		if format == "csv" {
-			rowValues := make([]string, len(columns))
-			for i, v := range values {
-				if v == nil {
-					rowValues[i] = "NULL"
-				} else {
-					rowValues[i] = fmt.Sprintf("%v", v)
+		// Write rows
+		for _, row := range rows {
+			if format == "csv" {
+				values := make([]string, len(columns))
+				for i, col := range columns {
+					if val := row[col]; val == nil {
+						values[i] = "NULL"
+					} else {
+						values[i] = fmt.Sprintf("%v", val)
+					}
+				}
+				if _, err := fmt.Fprintf(file, "%s\n", strings.Join(values, ",")); err != nil {
+					return fmt.Errorf("failed to write row: %v", err)
 				}
 			}
-			if _, err := fmt.Fprintf(file, "%s\n", strings.Join(rowValues, ",")); err != nil {
-				return fmt.Errorf("failed to write row: %v", err)
-			}
+			processedRows++
 		}
 
-		processedRows++
-		if processedRows%int64(batchSize) == 0 {
-			// Update state
-			if err := db.stateManager.UpdateState(table, processedRows); err != nil {
-				return fmt.Errorf("failed to update state: %v", err)
-			}
+		// Update state
+		if err := db.stateManager.UpdateState(table, processedRows); err != nil {
+			return fmt.Errorf("failed to update state: %v", err)
 		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error iterating rows: %v", err)
-	}
-
-	// Update final state
-	if err := db.stateManager.UpdateState(table, processedRows); err != nil {
-		return fmt.Errorf("failed to update final state: %v", err)
 	}
 
 	return nil
+}
+
+func (db *PostgresDB) ExtractBatch(table string, offset, limit int64, keyColumns, whereClause string) ([]map[string]interface{}, error) {
+	// Build the query with WHERE clause and ORDER BY if key columns are provided
+	query := fmt.Sprintf("SELECT * FROM %s", table)
+	if whereClause != "" {
+		query += " WHERE " + whereClause
+	}
+	if keyColumns != "" {
+		query += " ORDER BY " + keyColumns
+	}
+	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+
+	rows, err := db.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %v", err)
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get columns: %v", err)
+	}
+
+	var result []map[string]interface{}
+	for rows.Next() {
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range values {
+			valuePtrs[i] = &values[i]
+		}
+
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %v", err)
+		}
+
+		row := make(map[string]interface{})
+		for i, col := range columns {
+			row[col] = values[i]
+		}
+		result = append(result, row)
+	}
+
+	return result, nil
 }
 
 func (db *PostgresDB) GetTotalRows(table string) (int64, error) {
@@ -250,91 +267,6 @@ func (db *PostgresDB) GetColumns(table string) ([]string, error) {
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating columns: %v", err)
-	}
-
-	return columns, nil
-}
-
-func (db *PostgresDB) ExtractBatch(table string, offset, limit int64) ([]map[string]interface{}, error) {
-	// Get primary key columns for ordering
-	pkColumns, err := db.getPrimaryKeyColumns(table)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get primary key columns: %v", err)
-	}
-
-	// Build query
-	query := fmt.Sprintf("SELECT * FROM %s", table)
-	if len(pkColumns) > 0 {
-		query += " ORDER BY " + strings.Join(pkColumns, ", ")
-	}
-	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
-
-	// Execute query
-	rows, err := db.db.Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute query: %v", err)
-	}
-	defer rows.Close()
-
-	// Get column names
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get columns: %v", err)
-	}
-
-	// Scan rows
-	values := make([]interface{}, len(columns))
-	valuePtrs := make([]interface{}, len(columns))
-	for i := range values {
-		valuePtrs[i] = &values[i]
-	}
-
-	var result []map[string]interface{}
-	for rows.Next() {
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %v", err)
-		}
-
-		row := make(map[string]interface{})
-		for i, v := range values {
-			row[columns[i]] = v
-		}
-		result = append(result, row)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %v", err)
-	}
-
-	return result, nil
-}
-
-func (db *PostgresDB) getPrimaryKeyColumns(table string) ([]string, error) {
-	query := `
-		SELECT column_name
-		FROM information_schema.columns
-		WHERE table_name = $1
-		AND is_identity = 'YES'
-		ORDER BY ordinal_position;
-	`
-
-	rows, err := db.db.Query(query, table)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query primary key columns: %v", err)
-	}
-	defer rows.Close()
-
-	var columns []string
-	for rows.Next() {
-		var column string
-		if err := rows.Scan(&column); err != nil {
-			return nil, fmt.Errorf("failed to scan primary key column: %v", err)
-		}
-		columns = append(columns, column)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating primary key columns: %v", err)
 	}
 
 	return columns, nil

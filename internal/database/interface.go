@@ -9,14 +9,18 @@ import (
 
 // Database defines the interface for database operations
 type Database interface {
+	// Connect establishes a connection to the database
+	Connect() error
+	// Close closes the database connection
+	Close() error
 	// ExtractData extracts data from a table and writes it to a file
-	ExtractData(table, outputFile, format string, batchSize int) error
+	ExtractData(table, outputFile, format string, batchSize int, keyColumns, whereClause string) error
 	// GetTotalRows returns the total number of rows in a table
 	GetTotalRows(table string) (int64, error)
 	// GetColumns returns the column names for a table
 	GetColumns(table string) ([]string, error)
 	// ExtractBatch extracts a batch of rows from a table
-	ExtractBatch(table string, offset, limit int64) ([]map[string]interface{}, error)
+	ExtractBatch(table string, offset, limit int64, keyColumns, whereClause string) ([]map[string]interface{}, error)
 }
 
 // NewDatabase creates a new database instance based on the type
