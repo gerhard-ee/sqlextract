@@ -18,12 +18,20 @@ jobs:
         with:
           go-version: '1.21'
           cache: true
+          cache-dependency-path: |
+            **/go.sum
+            **/go.mod
 
       - name: Install dependencies
         run: make deps
 
       - name: Run tests
         run: make test
+
+      - name: Clean Go module cache
+        run: |
+          sudo rm -rf ~/.cache/go-build
+          sudo rm -rf $(go env GOMODCACHE)
 
       - name: Run linter
         uses: golangci/golangci-lint-action@v4
