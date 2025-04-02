@@ -37,7 +37,7 @@ jobs:
         uses: golangci/golangci-lint-action@v4
         with:
           version: v1.55.2
-          args: --timeout=5m --enable=gofmt,govet,errcheck,staticcheck,gosimple,ineffassign,unused,gosec,gocritic,gocyclo,goimports,typecheck,unconvert,unparam,varcheck,whitespace --disable=golint,goanalysis_metalinter
+          args: --timeout=5m --enable=gofmt,govet,errcheck,staticcheck,gosimple,ineffassign,unused,gosec,gocritic,gocyclo,goimports,typecheck,unconvert,unparam,varcheck,whitespace --disable=golint
 
       - name: Generate coverage
         run: make coverage
