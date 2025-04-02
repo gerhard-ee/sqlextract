@@ -35,13 +35,6 @@ jobs:
       - name: Generate coverage
         run: go test -v -timeout 30s -coverprofile=coverage.out ./...
 
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage.out
-          fail_ci_if_error: true
-          token: ${{ secrets.CODECOV_TOKEN }}
-
   build:
     name: Build
     needs: test
