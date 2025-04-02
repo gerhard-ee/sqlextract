@@ -162,11 +162,8 @@ func (db *BigQueryDB) GetTotalRows(table string) (int64, error) {
 
 	// If the count is too large, use an approximate count
 	if count > 1000000 {
-		query = fmt.Sprintf(`
-			SELECT row_count
-			FROM \`%s.%s.__TABLES__\`
-			WHERE table_id = '%s'
-		`, db.config.ProjectID, db.config.Database, table)
+		query = fmt.Sprintf("SELECT row_count FROM `%s.%s.__TABLES__` WHERE table_id = '%s'",
+			db.config.ProjectID, db.config.Database, table)
 		q = db.client.Query(query)
 		it, err = q.Read(ctx)
 		if err != nil {

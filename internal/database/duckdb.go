@@ -1,27 +1,33 @@
 package database
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/gerhard-ee/sqlextract/internal/config"
 	"github.com/gerhard-ee/sqlextract/internal/state"
 	_ "github.com/marcboeker/go-duckdb"
 )
 
 type DuckDB struct {
-	config *Config
-	db     *sql.DB
-	state  state.Manager
+	config       *config.Config
+	db           *sql.DB
+	stateManager state.Manager
 }
 
-func NewDuckDB(config *Config, stateManager state.Manager) Database {
-	return &DuckDB{
-		config: config,
-		state:  stateManager,
+func NewDuckDB(cfg *config.Config, stateManager state.Manager) (Database, error) {
+	db := &DuckDB{
+		config:       cfg,
+		stateManager: stateManager,
 	}
+	if err := db.Connect(); err != nil {
+		return nil, fmt.Errorf("failed to connect to DuckDB: %v", err)
+	}
+	return db, nil
 }
 
 func (db *DuckDB) Connect() error {
@@ -39,6 +45,151 @@ func (db *DuckDB) Close() error {
 		return db.db.Close()
 	}
 	return nil
+}
+
+func (db *DuckDB) ExtractData(table, outputFile, format string, batchSize int) error {
+	// Get current state
+	currentState, err := db.stateManager.GetState(table)
+	if err != nil {
+		// Create new state if it doesn't exist
+		currentState = &state.State{
+			Table:       table,
+			LastUpdated: time.Now(),
+			Status:      "running",
+		}
+		if err := db.stateManager.CreateState(currentState); err != nil {
+			return fmt.Errorf("failed to create state: %v", err)
+		}
+	}
+
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(filepath.Dir(outputFile), 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %v", err)
+	}
+
+	// Get total rows
+	totalRows, err := db.GetTotalRows(table)
+	if err != nil {
+		return fmt.Errorf("failed to get total rows: %v", err)
+	}
+
+	// Get columns
+	columns, err := db.GetColumns(table)
+	if err != nil {
+		return fmt.Errorf("failed to get columns: %v", err)
+	}
+
+	// Create output file
+	file, err := os.Create(outputFile)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %v", err)
+	}
+	defer file.Close()
+
+	// Write header if CSV format
+	if format == "csv" {
+		if _, err := fmt.Fprintf(file, "%s\n", strings.Join(columns, ",")); err != nil {
+			return fmt.Errorf("failed to write header: %v", err)
+		}
+	}
+
+	// Process data in batches
+	processedRows := int64(0)
+	for offset := int64(0); offset < totalRows; offset += int64(batchSize) {
+		rows, err := db.ExtractBatch(table, offset, int64(batchSize))
+		if err != nil {
+			return fmt.Errorf("failed to extract batch: %v", err)
+		}
+
+		// Write rows
+		for _, row := range rows {
+			if format == "csv" {
+				values := make([]string, len(columns))
+				for i, col := range columns {
+					if val := row[col]; val == nil {
+						values[i] = "NULL"
+					} else {
+						values[i] = fmt.Sprintf("%v", val)
+					}
+				}
+				if _, err := fmt.Fprintf(file, "%s\n", strings.Join(values, ",")); err != nil {
+					return fmt.Errorf("failed to write row: %v", err)
+				}
+			}
+			processedRows++
+		}
+
+		// Update state
+		if err := db.stateManager.UpdateState(table, processedRows); err != nil {
+			return fmt.Errorf("failed to update state: %v", err)
+		}
+	}
+
+	return nil
+}
+
+func (db *DuckDB) GetTotalRows(table string) (int64, error) {
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
+	var count int64
+	err := db.db.QueryRow(query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get row count: %v", err)
+	}
+	return count, nil
+}
+
+func (db *DuckDB) GetColumns(table string) ([]string, error) {
+	query := fmt.Sprintf("SELECT column_name FROM information_schema.columns WHERE table_name = '%s' ORDER BY ordinal_position", table)
+	rows, err := db.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get columns: %v", err)
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			return nil, fmt.Errorf("failed to scan column: %v", err)
+		}
+		columns = append(columns, column)
+	}
+	return columns, nil
+}
+
+func (db *DuckDB) ExtractBatch(table string, offset, limit int64) ([]map[string]interface{}, error) {
+	query := fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET %d", table, limit, offset)
+	rows, err := db.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %v", err)
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get columns: %v", err)
+	}
+
+	var result []map[string]interface{}
+	for rows.Next() {
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range values {
+			valuePtrs[i] = &values[i]
+		}
+
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %v", err)
+		}
+
+		row := make(map[string]interface{})
+		for i, col := range columns {
+			row[col] = values[i]
+		}
+		result = append(result, row)
+	}
+
+	return result, nil
 }
 
 func (db *DuckDB) GetTableSchema(tableName string) ([]Column, error) {
@@ -66,135 +217,6 @@ func (db *DuckDB) GetTableSchema(tableName string) ([]Column, error) {
 	}
 
 	return columns, nil
-}
-
-func (d *DuckDB) ExtractData(ctx context.Context, table string, columns []Column, batchSize int, offset int64) ([][]interface{}, error) {
-	// Get or create state for this extraction
-	jobID := fmt.Sprintf("%s-%s-%d", d.config.Database, table, time.Now().UnixNano())
-	currentState, err := d.state.GetState(ctx, jobID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get state: %v", err)
-	}
-
-	if currentState == nil {
-		// Create new state
-		currentState = &state.State{
-			JobID:       jobID,
-			Table:       table,
-			LastOffset:  offset,
-			LastUpdated: time.Now(),
-			Status:      "running",
-		}
-		if err := d.state.CreateState(ctx, currentState); err != nil {
-			return nil, fmt.Errorf("failed to create state: %v", err)
-		}
-	}
-
-	// Try to acquire lock
-	locked, err := d.state.LockState(ctx, jobID, 5*time.Minute)
-	if err != nil {
-		return nil, fmt.Errorf("failed to acquire lock: %v", err)
-	}
-	if !locked {
-		return nil, fmt.Errorf("another process is already running this extraction")
-	}
-	defer d.state.UnlockState(ctx, jobID)
-
-	// Build column list for SELECT
-	var columnNames []string
-	for _, col := range columns {
-		columnNames = append(columnNames, col.Name)
-	}
-
-	// Build WHERE clause for keyset pagination
-	var whereClause string
-	var args []interface{}
-	if currentState.LastValues != nil {
-		// Use last values from state for keyset pagination
-		whereClause = "WHERE "
-		for i, col := range columns {
-			if i > 0 {
-				whereClause += " OR ("
-				for j := 0; j < i; j++ {
-					whereClause += fmt.Sprintf("%s = ? AND ", columns[j].Name)
-				}
-				whereClause += fmt.Sprintf("%s > ?)", col.Name)
-			} else {
-				whereClause += fmt.Sprintf("%s > ?", col.Name)
-			}
-			args = append(args, currentState.LastValues[i])
-		}
-	}
-
-	// Build ORDER BY clause
-	orderBy := "ORDER BY " + strings.Join(columnNames, ", ")
-
-	// Build the complete query
-	var query string
-	if d.config.Schema != "" {
-		query = fmt.Sprintf(`
-			SELECT %s
-			FROM %s.%s
-			%s
-			%s
-			LIMIT %d
-		`, strings.Join(columnNames, ", "), d.config.Schema, table, whereClause, orderBy, batchSize)
-	} else {
-		query = fmt.Sprintf(`
-			SELECT %s
-			FROM %s
-			%s
-			%s
-			LIMIT %d
-		`, strings.Join(columnNames, ", "), table, whereClause, orderBy, batchSize)
-	}
-
-	// Execute query
-	rows, err := d.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		currentState.Status = "failed"
-		currentState.Error = err.Error()
-		d.state.UpdateState(ctx, currentState)
-		return nil, fmt.Errorf("failed to execute query: %v", err)
-	}
-	defer rows.Close()
-
-	var result [][]interface{}
-	var lastValues []interface{}
-	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		scanArgs := make([]interface{}, len(columns))
-		for i := range values {
-			scanArgs[i] = &values[i]
-		}
-
-		if err := rows.Scan(scanArgs...); err != nil {
-			currentState.Status = "failed"
-			currentState.Error = err.Error()
-			d.state.UpdateState(ctx, currentState)
-			return nil, fmt.Errorf("failed to scan row: %v", err)
-		}
-
-		result = append(result, values)
-		lastValues = values
-	}
-
-	if err := rows.Err(); err != nil {
-		currentState.Status = "failed"
-		currentState.Error = err.Error()
-		d.state.UpdateState(ctx, currentState)
-		return nil, fmt.Errorf("error iterating rows: %v", err)
-	}
-
-	// Update state with last values
-	currentState.LastValues = lastValues
-	currentState.LastUpdated = time.Now()
-	currentState.ProcessedRows += int64(len(result))
-	if err := d.state.UpdateState(ctx, currentState); err != nil {
-		return nil, fmt.Errorf("failed to update state: %v", err)
-	}
-
-	return result, nil
 }
 
 func (db *DuckDB) GetRowCount(tableName string) (int64, error) {

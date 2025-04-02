@@ -35,8 +35,9 @@ func NewKubernetesManager(namespace string) (*KubernetesManager, error) {
 	}, nil
 }
 
-func (k *KubernetesManager) GetState(ctx context.Context, jobID string) (*State, error) {
-	cm, err := k.client.CoreV1().ConfigMaps(k.namespace).Get(ctx, fmt.Sprintf("sqlextract-state-%s", jobID), metav1.GetOptions{})
+func (k *KubernetesManager) GetState(table string) (*State, error) {
+	ctx := context.Background()
+	cm, err := k.client.CoreV1().ConfigMaps(k.namespace).Get(ctx, fmt.Sprintf("sqlextract-state-%s", table), metav1.GetOptions{})
 	if err != nil {
 		return nil, nil // Return nil if ConfigMap doesn't exist
 	}
@@ -49,7 +50,23 @@ func (k *KubernetesManager) GetState(ctx context.Context, jobID string) (*State,
 	return &state, nil
 }
 
-func (k *KubernetesManager) UpdateState(ctx context.Context, state *State) error {
+func (k *KubernetesManager) UpdateState(table string, processedRows int64) error {
+	ctx := context.Background()
+	state, err := k.GetState(table)
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		state = &State{
+			Table:       table,
+			LastUpdated: time.Now(),
+			Status:      "running",
+		}
+	}
+
+	state.ProcessedRows = processedRows
+	state.LastUpdated = time.Now()
+
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %v", err)
@@ -57,7 +74,7 @@ func (k *KubernetesManager) UpdateState(ctx context.Context, state *State) error
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("sqlextract-state-%s", state.JobID),
+			Name: fmt.Sprintf("sqlextract-state-%s", table),
 		},
 		Data: map[string]string{
 			"state": string(data),
@@ -66,13 +83,18 @@ func (k *KubernetesManager) UpdateState(ctx context.Context, state *State) error
 
 	_, err = k.client.CoreV1().ConfigMaps(k.namespace).Update(ctx, cm, metav1.UpdateOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to update ConfigMap: %v", err)
+		// If update fails because ConfigMap doesn't exist, create it
+		_, err = k.client.CoreV1().ConfigMaps(k.namespace).Create(ctx, cm, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to create ConfigMap: %v", err)
+		}
 	}
 
 	return nil
 }
 
-func (k *KubernetesManager) CreateState(ctx context.Context, state *State) error {
+func (k *KubernetesManager) CreateState(state *State) error {
+	ctx := context.Background()
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %v", err)
@@ -80,7 +102,7 @@ func (k *KubernetesManager) CreateState(ctx context.Context, state *State) error
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("sqlextract-state-%s", state.JobID),
+			Name: fmt.Sprintf("sqlextract-state-%s", state.Table),
 		},
 		Data: map[string]string{
 			"state": string(data),
@@ -95,7 +117,8 @@ func (k *KubernetesManager) CreateState(ctx context.Context, state *State) error
 	return nil
 }
 
-func (k *KubernetesManager) DeleteState(ctx context.Context, jobID string) error {
+func (k *KubernetesManager) DeleteState(jobID string) error {
+	ctx := context.Background()
 	err := k.client.CoreV1().ConfigMaps(k.namespace).Delete(ctx, fmt.Sprintf("sqlextract-state-%s", jobID), metav1.DeleteOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to delete ConfigMap: %v", err)
@@ -104,7 +127,8 @@ func (k *KubernetesManager) DeleteState(ctx context.Context, jobID string) error
 	return nil
 }
 
-func (k *KubernetesManager) ListStates(ctx context.Context, table string) ([]*State, error) {
+func (k *KubernetesManager) ListStates() ([]*State, error) {
+	ctx := context.Background()
 	list, err := k.client.CoreV1().ConfigMaps(k.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "app=sqlextract",
 	})
@@ -118,21 +142,20 @@ func (k *KubernetesManager) ListStates(ctx context.Context, table string) ([]*St
 		if err := json.Unmarshal([]byte(cm.Data["state"]), &state); err != nil {
 			continue // Skip invalid states
 		}
-		if state.Table == table {
-			states = append(states, &state)
-		}
+		states = append(states, &state)
 	}
 
 	return states, nil
 }
 
-func (k *KubernetesManager) LockState(ctx context.Context, jobID string, ttl time.Duration) (bool, error) {
+func (k *KubernetesManager) LockState(jobID string, duration time.Duration) (bool, error) {
+	ctx := context.Background()
 	lockKey := fmt.Sprintf("sqlextract-lock-%s", jobID)
 	lock := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: lockKey,
 			Annotations: map[string]string{
-				"expires": time.Now().Add(ttl).Format(time.RFC3339),
+				"expires": time.Now().Add(duration).Format(time.RFC3339),
 			},
 		},
 		Data: map[string]string{
@@ -148,7 +171,8 @@ func (k *KubernetesManager) LockState(ctx context.Context, jobID string, ttl tim
 	return true, nil
 }
 
-func (k *KubernetesManager) UnlockState(ctx context.Context, jobID string) error {
+func (k *KubernetesManager) UnlockState(jobID string) error {
+	ctx := context.Background()
 	lockKey := fmt.Sprintf("sqlextract-lock-%s", jobID)
 	err := k.client.CoreV1().ConfigMaps(k.namespace).Delete(ctx, lockKey, metav1.DeleteOptions{})
 	if err != nil {
