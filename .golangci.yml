@@ -1,4 +1,4 @@
-version: 1.55.2
+version: "1.55.2"
 
 run:
   timeout: 5m
