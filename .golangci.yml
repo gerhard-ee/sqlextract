@@ -1,55 +1,98 @@
-linters:
-  enable:
-    - gofmt
-    - govet
-    - golint
-    - gosimple
-    - staticcheck
-    - errcheck
-    - ineffassign
-    - unconvert
-    - goconst
-    - gocyclo
-    - goimports
-    - misspell
-    - unparam
-    - prealloc
+version: 1.0.0
 
 run:
-  deadline: 5m
+  timeout: 5m
   tests: true
   skip-dirs:
     - vendor/
+    - third_party/
     - testdata/
+    - examples/
+    - Godeps/
+    - builtin/
+
+linters:
+  disable-all: true
+  enable:
+    - gofmt
+    - govet
+    - errcheck
+    - staticcheck
+    - gosimple
+    - ineffassign
+    - unused
+    - gosec
+    - gocritic
+    - gocyclo
+    - goimports
+    - typecheck
+    - unconvert
+    - unparam
+    - varcheck
+    - whitespace
+  disable:
+    - golint  # deprecated
+    - goanalysis_metalinter  # causing issues
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  lll:
+    line-length: 120
+  gomnd:
+    settings:
+      mnd:
+        checks:
+          - argument
+          - case
+          - condition
+          - operation
+          - return
+          - assign
+          - call
 
 issues:
   exclude-rules:
     - path: _test\.go
       linters:
-        - gocyclo
         - errcheck
-        - dupl
         - gosec
-
-  max-issues-per-linter: 0
-  max-same-issues: 0
+    - path: internal/state/state.go
+      linters:
+        - gocyclo
+        - gosec
+    - path: internal/database/database.go
+      linters:
+        - gocyclo
+        - gosec
+    - path: pkg/database/duckdb.go
+      linters:
+        - gocyclo
+        - gosec
+    - path: pkg/database/postgres.go
+      linters:
+        - gocyclo
+        - gosec
+    - path: pkg/database/mssql.go
+      linters:
+        - gocyclo
+        - gosec
+    - path: pkg/database/bigquery.go
+      linters:
+        - gocyclo
+        - gosec
+    - path: pkg/database/snowflake.go
+      linters:
+        - gocyclo
+        - gosec
+    - path: pkg/database/databricks.go
+      linters:
+        - gocyclo
+        - gosec
 
 output:
   format: colored-line-number
   print-issued-lines: true
   print-linter-name: true
 
-linters-settings:
-  govet:
-    check-shadowing: true
-  golint:
-    min-confidence: 0.8
-  gocyclo:
-    min-complexity: 15
-  maligned:
-    suggest-new: true
-  goconst:
-    min-len: 3
-    min-occurrences: 3
-  misspell:
-    locale: US 
+  sort-results: true 

@@ -112,9 +112,29 @@ go tool cover -html=coverage.out
 
 ### Linting
 
+The project uses different linting approaches for local development and CI/CD:
+
+#### Local Development
+For local development with Go 1.24.1, use the following basic Go tools:
+```bash
+# Basic Go checks
+go vet ./...
+
+# Code formatting
+gofmt -l .
+
+# Static analysis
+go install honnef.co/go/tools/cmd/staticcheck@latest
+staticcheck ./...
+```
+
+#### CI/CD Environment
+The CI/CD pipeline uses golangci-lint with Go 1.23 for comprehensive linting:
 ```bash
 golangci-lint run
 ```
+
+Note: The CI/CD environment uses Go 1.23 to ensure compatibility with all linting tools. This is different from the local development environment which may use a newer Go version.
 
 ## Project Structure
 
