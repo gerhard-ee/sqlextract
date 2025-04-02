@@ -56,7 +56,7 @@ func (db *DatabricksDB) Close() error {
 	return nil
 }
 
-func (db *DatabricksDB) ExtractData(table, outputFile, format string, batchSize int) error {
+func (db *DatabricksDB) ExtractData(table, outputFile, format string, batchSize int, keyColumns, whereClause string) error {
 	// Get current state
 	currentState, err := db.stateManager.GetState(table)
 	if err != nil {
@@ -105,7 +105,7 @@ func (db *DatabricksDB) ExtractData(table, outputFile, format string, batchSize 
 	// Process data in batches
 	processedRows := int64(0)
 	for offset := int64(0); offset < totalRows; offset += int64(batchSize) {
-		rows, err := db.ExtractBatch(table, offset, int64(batchSize))
+		rows, err := db.ExtractBatch(table, offset, int64(batchSize), keyColumns, whereClause)
 		if err != nil {
 			return fmt.Errorf("failed to extract batch: %v", err)
 		}
@@ -166,8 +166,17 @@ func (db *DatabricksDB) GetColumns(table string) ([]string, error) {
 	return columns, nil
 }
 
-func (db *DatabricksDB) ExtractBatch(table string, offset, limit int64) ([]map[string]interface{}, error) {
-	query := fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET %d", table, limit, offset)
+func (db *DatabricksDB) ExtractBatch(table string, offset, limit int64, keyColumns, whereClause string) ([]map[string]interface{}, error) {
+	// Build query
+	query := fmt.Sprintf("SELECT * FROM %s", table)
+	if whereClause != "" {
+		query += " WHERE " + whereClause
+	}
+	if keyColumns != "" {
+		query += " ORDER BY " + keyColumns
+	}
+	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+
 	rows, err := db.db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %v", err)

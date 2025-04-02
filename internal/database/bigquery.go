@@ -34,7 +34,7 @@ func NewBigQuery(cfg *config.Config, stateManager state.Manager) (Database, erro
 	}, nil
 }
 
-func (db *BigQueryDB) ExtractData(table, outputFile, format string, batchSize int) error {
+func (db *BigQueryDB) ExtractData(table, outputFile, format string, batchSize int, keyColumns, whereClause string) error {
 	// Get current state
 	currentState, err := db.stateManager.GetState(table)
 	if err != nil {
@@ -54,26 +54,16 @@ func (db *BigQueryDB) ExtractData(table, outputFile, format string, batchSize in
 		return fmt.Errorf("failed to create output directory: %v", err)
 	}
 
-	// Build query
-	query := fmt.Sprintf("SELECT * FROM `%s.%s.%s`", db.config.ProjectID, db.config.Database, table)
-
-	// Execute query
-	ctx := context.Background()
-	q := db.client.Query(query)
-	it, err := q.Read(ctx)
+	// Get total rows
+	totalRows, err := db.GetTotalRows(table)
 	if err != nil {
-		return fmt.Errorf("failed to execute query: %v", err)
+		return fmt.Errorf("failed to get total rows: %v", err)
 	}
 
-	// Get column names from the first row
-	var firstRow []bigquery.Value
-	if err := it.Next(&firstRow); err != nil {
-		return fmt.Errorf("failed to read first row: %v", err)
-	}
-
-	columns := make([]string, len(firstRow))
-	for i := range firstRow {
-		columns[i] = fmt.Sprintf("column_%d", i+1)
+	// Get columns
+	columns, err := db.GetColumns(table)
+	if err != nil {
+		return fmt.Errorf("failed to get columns: %v", err)
 	}
 
 	// Create output file
@@ -83,28 +73,74 @@ func (db *BigQueryDB) ExtractData(table, outputFile, format string, batchSize in
 	}
 	defer file.Close()
 
-	// Write header
+	// Write header if CSV format
 	if format == "csv" {
 		if _, err := fmt.Fprintf(file, "%s\n", strings.Join(columns, ",")); err != nil {
 			return fmt.Errorf("failed to write header: %v", err)
 		}
+	}
 
-		// Write first row
-		rowValues := make([]string, len(firstRow))
-		for i, v := range firstRow {
-			if v == nil {
-				rowValues[i] = "NULL"
-			} else {
-				rowValues[i] = fmt.Sprintf("%v", v)
-			}
+	// Process data in batches
+	processedRows := int64(0)
+	for offset := int64(0); offset < totalRows; offset += int64(batchSize) {
+		rows, err := db.ExtractBatch(table, offset, int64(batchSize), keyColumns, whereClause)
+		if err != nil {
+			return fmt.Errorf("failed to extract batch: %v", err)
 		}
-		if _, err := fmt.Fprintf(file, "%s\n", strings.Join(rowValues, ",")); err != nil {
-			return fmt.Errorf("failed to write first row: %v", err)
+
+		// Write rows
+		for _, row := range rows {
+			if format == "csv" {
+				values := make([]string, len(columns))
+				for i, col := range columns {
+					if val := row[col]; val == nil {
+						values[i] = "NULL"
+					} else {
+						values[i] = fmt.Sprintf("%v", val)
+					}
+				}
+				if _, err := fmt.Fprintf(file, "%s\n", strings.Join(values, ",")); err != nil {
+					return fmt.Errorf("failed to write row: %v", err)
+				}
+			}
+			processedRows++
+		}
+
+		// Update state
+		if err := db.stateManager.UpdateState(table, processedRows); err != nil {
+			return fmt.Errorf("failed to update state: %v", err)
 		}
 	}
 
-	// Process remaining rows
-	processedRows := int64(1)
+	return nil
+}
+
+func (db *BigQueryDB) ExtractBatch(table string, offset, limit int64, keyColumns, whereClause string) ([]map[string]interface{}, error) {
+	// Build query
+	query := fmt.Sprintf("SELECT * FROM `%s.%s.%s`", db.config.ProjectID, db.config.Database, table)
+	if whereClause != "" {
+		query += " WHERE " + whereClause
+	}
+	if keyColumns != "" {
+		query += " ORDER BY " + keyColumns
+	}
+	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+
+	// Execute query
+	ctx := context.Background()
+	q := db.client.Query(query)
+	it, err := q.Read(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %v", err)
+	}
+
+	// Get column names
+	columns, err := db.GetColumns(table)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get columns: %v", err)
+	}
+
+	var result []map[string]interface{}
 	for {
 		var values []bigquery.Value
 		err := it.Next(&values)
@@ -112,36 +148,14 @@ func (db *BigQueryDB) ExtractData(table, outputFile, format string, batchSize in
 			break
 		}
 
-		// Write row
-		if format == "csv" {
-			rowValues := make([]string, len(values))
-			for i, v := range values {
-				if v == nil {
-					rowValues[i] = "NULL"
-				} else {
-					rowValues[i] = fmt.Sprintf("%v", v)
-				}
-			}
-			if _, err := fmt.Fprintf(file, "%s\n", strings.Join(rowValues, ",")); err != nil {
-				return fmt.Errorf("failed to write row: %v", err)
-			}
+		row := make(map[string]interface{})
+		for i, col := range columns {
+			row[col] = values[i]
 		}
-
-		processedRows++
-		if processedRows%int64(batchSize) == 0 {
-			// Update state
-			if err := db.stateManager.UpdateState(table, processedRows); err != nil {
-				return fmt.Errorf("failed to update state: %v", err)
-			}
-		}
+		result = append(result, row)
 	}
 
-	// Update final state
-	if err := db.stateManager.UpdateState(table, processedRows); err != nil {
-		return fmt.Errorf("failed to update final state: %v", err)
-	}
-
-	return nil
+	return result, nil
 }
 
 func (db *BigQueryDB) GetTotalRows(table string) (int64, error) {
@@ -200,51 +214,19 @@ func (db *BigQueryDB) GetColumns(table string) ([]string, error) {
 	return columns, nil
 }
 
-func (db *BigQueryDB) ExtractBatch(table string, offset, limit int64) ([]map[string]interface{}, error) {
-	// Build query
-	query := fmt.Sprintf("SELECT * FROM `%s.%s.%s` LIMIT %d OFFSET %d", db.config.ProjectID, db.config.Database, table, limit, offset)
+func (db *BigQueryDB) Close() error {
+	if db.client != nil {
+		return db.client.Close()
+	}
+	return nil
+}
 
-	// Execute query
+func (db *BigQueryDB) Connect() error {
 	ctx := context.Background()
-	q := db.client.Query(query)
-	it, err := q.Read(ctx)
+	client, err := bigquery.NewClient(ctx, db.config.ProjectID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute query: %v", err)
+		return fmt.Errorf("failed to create BigQuery client: %v", err)
 	}
-
-	// Get column names from the first row
-	var firstRow []bigquery.Value
-	if err := it.Next(&firstRow); err != nil {
-		return nil, fmt.Errorf("failed to read first row: %v", err)
-	}
-
-	columns := make([]string, len(firstRow))
-	for i := range firstRow {
-		columns[i] = fmt.Sprintf("column_%d", i+1)
-	}
-
-	// Create result with first row
-	result := []map[string]interface{}{
-		make(map[string]interface{}),
-	}
-	for i, v := range firstRow {
-		result[0][columns[i]] = v
-	}
-
-	// Scan remaining rows
-	for {
-		var values []bigquery.Value
-		err := it.Next(&values)
-		if err != nil {
-			break
-		}
-
-		row := make(map[string]interface{})
-		for i, v := range values {
-			row[columns[i]] = v
-		}
-		result = append(result, row)
-	}
-
-	return result, nil
+	db.client = client
+	return nil
 }
