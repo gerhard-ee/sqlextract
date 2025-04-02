@@ -1,1 +1,26 @@
-run:\n  timeout: 5m\n  tests: true\n\nlinters:\n  enable:\n    - gofmt\n    - govet\n    - errcheck\n    - staticcheck\n    - gosimple\n    - ineffassign\n    - unused\n    - gosec\n    - gocritic\n    - gocyclo\n    - goimports\n    - typecheck\n    - unconvert\n    - unparam\n    - varcheck\n    - whitespace\n  disable:\n    - golint  # deprecated
+version: 1.55.2
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - gofmt
+    - govet
+    - errcheck
+    - staticcheck
+    - gosimple
+    - ineffassign
+    - unused
+    - gosec
+    - gocritic
+    - gocyclo
+    - goimports
+    - typecheck
+    - unconvert
+    - unparam
+    - varcheck
+    - whitespace
+  disable:
+    - golint  # deprecated
