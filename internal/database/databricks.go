@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -208,4 +209,12 @@ func (db *DatabricksDB) ExtractBatch(table string, offset, limit int64, keyColum
 	}
 
 	return result, nil
+}
+
+func (db *DatabricksDB) Exec(ctx context.Context, query string) error {
+	_, err := db.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to execute query: %v", err)
+	}
+	return nil
 }

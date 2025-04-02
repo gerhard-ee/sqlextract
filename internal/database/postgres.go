@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -273,11 +274,19 @@ func (db *PostgresDB) GetColumns(table string) ([]string, error) {
 }
 
 func (db *PostgresDB) GetRowCount(tableName string) (int64, error) {
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s", db.config.Schema, tableName)
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
 	var count int64
 	err := db.db.QueryRow(query).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get row count: %v", err)
 	}
 	return count, nil
+}
+
+func (db *PostgresDB) Exec(ctx context.Context, query string) error {
+	_, err := db.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to execute query: %v", err)
+	}
+	return nil
 }

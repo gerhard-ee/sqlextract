@@ -3,34 +3,37 @@ package database
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"cloud.google.com/go/bigquery"
-	"google.golang.org/api/option"
+	"github.com/gerhard-ee/sqlextract/internal/config"
+	"google.golang.org/api/iterator"
 )
 
 // BigQuery implements the Database interface for Google BigQuery
 type BigQuery struct {
-	config *Config
+	config *config.Config
 	client *bigquery.Client
 }
 
 // NewBigQuery creates a new BigQuery instance
-func NewBigQuery(config *Config) *BigQuery {
+func NewBigQuery(config *config.Config) (*BigQuery, error) {
+	ctx := context.Background()
+	client, err := bigquery.NewClient(ctx, config.ProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create BigQuery client: %v", err)
+	}
+
 	return &BigQuery{
 		config: config,
-	}
+		client: client,
+	}, nil
 }
 
 // Connect establishes a connection to BigQuery
 func (b *BigQuery) Connect(ctx context.Context) error {
-	// For BigQuery, DBName is the project ID
-	client, err := bigquery.NewClient(ctx, b.config.DBName, option.WithCredentialsFile(b.config.Password))
-	if err != nil {
-		return fmt.Errorf("failed to create BigQuery client: %v", err)
-	}
-
-	b.client = client
+	// Connection is established in NewBigQuery
 	return nil
 }
 
@@ -48,21 +51,21 @@ func (b *BigQuery) GetTableSchema(tableName string) ([]Column, error) {
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid table name format, expected 'dataset.table', got %s", tableName)
 	}
-	dataset, table := parts[0], parts[1]
+	dataset, tableName := parts[0], parts[1]
 
 	// Get table metadata
-	md, err := b.client.Dataset(dataset).Table(table).Metadata(context.Background())
+	md, err := b.client.Dataset(dataset).Table(tableName).Metadata(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table metadata: %v", err)
 	}
 
-	var columns []Column
-	for _, field := range md.Schema {
-		columns = append(columns, Column{
-			Name:     field.Name,
-			Type:     field.Type.String(),
-			Nullable: !field.Required,
-		})
+	// Convert schema to Column slice
+	columns := make([]Column, len(md.Schema))
+	for i, field := range md.Schema {
+		columns[i] = Column{
+			Name: field.Name,
+			Type: string(field.Type),
+		}
 	}
 
 	return columns, nil
@@ -71,7 +74,7 @@ func (b *BigQuery) GetTableSchema(tableName string) ([]Column, error) {
 // Query executes a query and returns the results
 func (b *BigQuery) Query(ctx context.Context, query string, args ...interface{}) (Rows, error) {
 	// Create query
-	q := b.client.Query(fmt.Sprintf(query, args...))
+	q := b.client.Query(query)
 
 	// Run query
 	job, err := q.Run(ctx)
@@ -89,13 +92,19 @@ func (b *BigQuery) Query(ctx context.Context, query string, args ...interface{})
 		return nil, fmt.Errorf("query failed: %v", err)
 	}
 
-	return job.Read(ctx)
+	// Get iterator
+	it, err := job.Read(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read results: %v", err)
+	}
+
+	return &bigQueryRows{it: it}, nil
 }
 
 // Exec executes a query without returning results
 func (b *BigQuery) Exec(ctx context.Context, query string, args ...interface{}) (Result, error) {
 	// Create query
-	q := b.client.Query(fmt.Sprintf(query, args...))
+	q := b.client.Query(query)
 
 	// Run query
 	job, err := q.Run(ctx)
@@ -117,7 +126,7 @@ func (b *BigQuery) Exec(ctx context.Context, query string, args ...interface{}) 
 }
 
 // GetTotalRows returns the total number of rows in a table
-func (b *BigQuery) GetTotalRows(ctx context.Context, table string) (int64, error) {
+func (b *BigQuery) GetTotalRows(table string) (int64, error) {
 	// Split dataset and table name
 	parts := strings.Split(table, ".")
 	if len(parts) != 2 {
@@ -126,16 +135,16 @@ func (b *BigQuery) GetTotalRows(ctx context.Context, table string) (int64, error
 	dataset, tableName := parts[0], parts[1]
 
 	// Get table metadata
-	md, err := b.client.Dataset(dataset).Table(tableName).Metadata(ctx)
+	md, err := b.client.Dataset(dataset).Table(tableName).Metadata(context.Background())
 	if err != nil {
 		return 0, fmt.Errorf("failed to get table metadata: %v", err)
 	}
 
-	return md.NumRows, nil
+	return int64(md.NumRows), nil
 }
 
 // GetColumns returns the columns of a table
-func (b *BigQuery) GetColumns(ctx context.Context, table string) ([]Column, error) {
+func (b *BigQuery) GetColumns(table string) ([]string, error) {
 	// Split dataset and table name
 	parts := strings.Split(table, ".")
 	if len(parts) != 2 {
@@ -144,29 +153,60 @@ func (b *BigQuery) GetColumns(ctx context.Context, table string) ([]Column, erro
 	dataset, tableName := parts[0], parts[1]
 
 	// Get table metadata
-	md, err := b.client.Dataset(dataset).Table(tableName).Metadata(ctx)
+	md, err := b.client.Dataset(dataset).Table(tableName).Metadata(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table metadata: %v", err)
 	}
 
-	var columns []Column
-	for _, field := range md.Schema {
-		columns = append(columns, Column{
-			Name:     field.Name,
-			Type:     field.Type.String(),
-			Nullable: !field.Required,
-		})
+	// Extract column names
+	columns := make([]string, len(md.Schema))
+	for i, field := range md.Schema {
+		columns[i] = field.Name
 	}
 
 	return columns, nil
 }
 
 // ExtractBatch extracts a batch of rows from a table
-func (b *BigQuery) ExtractBatch(ctx context.Context, table string, offset, limit int64) (Rows, error) {
-	query := fmt.Sprintf("SELECT * FROM `%s` ORDER BY %s LIMIT %d OFFSET %d",
-		table, b.getPrimaryKey(table), limit, offset)
+func (b *BigQuery) ExtractBatch(table string, offset, limit int64, keyColumns, whereClause string) ([]map[string]interface{}, error) {
+	// Split dataset and table name
+	parts := strings.Split(table, ".")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid table name format, expected 'dataset.table', got %s", table)
+	}
+	dataset, tableName := parts[0], parts[1]
 
-	return b.Query(ctx, query)
+	// Build query
+	query := fmt.Sprintf("SELECT * FROM %s.%s", dataset, tableName)
+	if whereClause != "" {
+		query += " WHERE " + whereClause
+	}
+	if keyColumns != "" {
+		query += " ORDER BY " + keyColumns
+	}
+	query += " LIMIT " + strconv.FormatInt(limit, 10) + " OFFSET " + strconv.FormatInt(offset, 10)
+
+	// Execute query
+	it, err := b.Query(context.Background(), query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %v", err)
+	}
+
+	// Convert rows to map slice
+	var result []map[string]interface{}
+	for it.Next() {
+		var row map[string]interface{}
+		if err := it.Scan(&row); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %v", err)
+		}
+		result = append(result, row)
+	}
+
+	if err := it.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %v", err)
+	}
+
+	return result, nil
 }
 
 // CreateDatabase creates the database if it doesn't exist
@@ -229,4 +269,42 @@ func (r *bigQueryResult) LastInsertId() (int64, error) {
 
 func (r *bigQueryResult) RowsAffected() (int64, error) {
 	return 0, fmt.Errorf("RowsAffected is not supported by BigQuery")
+}
+
+// bigQueryRows implements the Rows interface for BigQuery
+type bigQueryRows struct {
+	it         *bigquery.RowIterator
+	currentRow map[string]interface{}
+	err        error
+}
+
+func (r *bigQueryRows) Next() bool {
+	r.currentRow = make(map[string]interface{})
+	r.err = r.it.Next(&r.currentRow)
+	return r.err == nil
+}
+
+func (r *bigQueryRows) Scan(dest ...interface{}) error {
+	if len(dest) == 1 {
+		switch d := dest[0].(type) {
+		case *map[string]interface{}:
+			*d = r.currentRow
+			return nil
+		}
+	}
+	return fmt.Errorf("unsupported scan type")
+}
+
+func (r *bigQueryRows) Close() error {
+	return nil // BigQuery iterator doesn't need explicit closing
+}
+
+func (r *bigQueryRows) Err() error {
+	if r.err == nil {
+		return nil
+	}
+	if r.err == iterator.Done {
+		return nil
+	}
+	return r.err
 }

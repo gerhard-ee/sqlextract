@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -236,4 +237,12 @@ func (db *DuckDB) GetRowCount(tableName string) (int64, error) {
 		return 0, fmt.Errorf("failed to get row count: %v", err)
 	}
 	return count, nil
+}
+
+func (db *DuckDB) Exec(ctx context.Context, query string) error {
+	_, err := db.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to execute query: %v", err)
+	}
+	return nil
 }

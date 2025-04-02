@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/gerhard-ee/sqlextract/internal/config"
@@ -21,6 +22,8 @@ type Database interface {
 	GetColumns(table string) ([]string, error)
 	// ExtractBatch extracts a batch of rows from a table
 	ExtractBatch(table string, offset, limit int64, keyColumns, whereClause string) ([]map[string]interface{}, error)
+	// Exec executes a SQL query
+	Exec(ctx context.Context, query string) error
 }
 
 // NewDatabase creates a new database instance based on the type

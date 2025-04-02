@@ -230,3 +230,12 @@ func (db *BigQueryDB) Connect() error {
 	db.client = client
 	return nil
 }
+
+func (db *BigQueryDB) Exec(ctx context.Context, query string) error {
+	q := db.client.Query(query)
+	_, err := q.Read(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to execute query: %v", err)
+	}
+	return nil
+}

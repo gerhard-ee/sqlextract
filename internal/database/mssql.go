@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -221,16 +222,10 @@ func (db *MSSQLDB) GetTotalRows(table string) (int64, error) {
 }
 
 func (db *MSSQLDB) GetColumns(table string) ([]string, error) {
-	query := `
-		SELECT column_name
-		FROM information_schema.columns
-		WHERE table_name = @p1
-		ORDER BY ordinal_position;
-	`
-
-	rows, err := db.db.Query(query, sql.Named("p1", table))
+	query := fmt.Sprintf("SELECT column_name FROM information_schema.columns WHERE table_name = '%s' ORDER BY ordinal_position", table)
+	rows, err := db.db.Query(query)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query columns: %v", err)
+		return nil, fmt.Errorf("failed to get columns: %v", err)
 	}
 	defer rows.Close()
 
@@ -242,11 +237,6 @@ func (db *MSSQLDB) GetColumns(table string) ([]string, error) {
 		}
 		columns = append(columns, column)
 	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating columns: %v", err)
-	}
-
 	return columns, nil
 }
 
@@ -283,4 +273,12 @@ func (db *MSSQLDB) getPrimaryKeyColumns(table string) ([]string, error) {
 	}
 
 	return columns, nil
+}
+
+func (db *MSSQLDB) Exec(ctx context.Context, query string) error {
+	_, err := db.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to execute query: %v", err)
+	}
+	return nil
 }

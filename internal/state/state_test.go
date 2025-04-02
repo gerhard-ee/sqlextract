@@ -61,27 +61,26 @@ func TestMemoryManager(t *testing.T) {
 		numGoroutines := 10
 		numOperations := 100
 
+		// Create state first
+		state := &State{
+			Table:       "concurrent_table",
+			LastUpdated: time.Now(),
+			Status:      "running",
+		}
+		err := manager.CreateState(state)
+		if err != nil {
+			t.Fatalf("Failed to create state: %v", err)
+		}
+
 		// Test concurrent state updates
 		for i := 0; i < numGoroutines; i++ {
 			wg.Add(1)
 			go func(routineID int) {
 				defer wg.Done()
-				state := &State{
-					Table:       "concurrent_table",
-					LastUpdated: time.Now(),
-					Status:      "running",
-				}
 				for j := 0; j < numOperations; j++ {
-					if j == 0 {
-						err := manager.CreateState(state)
-						if err != nil {
-							t.Errorf("Failed to create state in goroutine %d: %v", routineID, err)
-						}
-					} else {
-						err := manager.UpdateState("concurrent_table", int64(j))
-						if err != nil {
-							t.Errorf("Failed to update state in goroutine %d: %v", routineID, err)
-						}
+					err := manager.UpdateState("concurrent_table", int64(j+1))
+					if err != nil {
+						t.Errorf("Failed to update state in goroutine %d: %v", routineID, err)
 					}
 				}
 			}(i)
@@ -100,6 +99,17 @@ func TestMemoryManager(t *testing.T) {
 
 	// Test locking mechanism
 	t.Run("Locking Mechanism", func(t *testing.T) {
+		// Create state first
+		state := &State{
+			Table:       "test_table",
+			LastUpdated: time.Now(),
+			Status:      "running",
+		}
+		err := manager.CreateState(state)
+		if err != nil {
+			t.Fatalf("Failed to create state: %v", err)
+		}
+
 		// Test LockState
 		locked, err := manager.LockState("test_table", 5*time.Second)
 		if err != nil {

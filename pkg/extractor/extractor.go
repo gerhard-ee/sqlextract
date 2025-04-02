@@ -219,7 +219,7 @@ func (e *Extractor) extractToCSV(ctx context.Context, file *os.File, columns []d
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			rows, err := e.db.ExtractBatch(e.table, offset, e.batchSize)
+			rows, err := e.db.ExtractBatch(e.table, offset, e.batchSize, "", "")
 			if err != nil {
 				return fmt.Errorf("failed to extract batch: %v", err)
 			}
@@ -263,7 +263,7 @@ func (e *Extractor) extractToParquet(ctx context.Context, file *os.File, columns
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			rows, err := e.db.ExtractBatch(e.table, offset, e.batchSize)
+			rows, err := e.db.ExtractBatch(e.table, offset, e.batchSize, "", "")
 			if err != nil {
 				return fmt.Errorf("failed to extract batch: %v", err)
 			}

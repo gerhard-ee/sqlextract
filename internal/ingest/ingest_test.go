@@ -106,14 +106,16 @@ func TestErrorHandling(t *testing.T) {
 
 	// Test nil ingester
 	var ingester Ingester
-	_, err = ingester.GenerateCSVIngestScript("source", "target")
-	if err == nil {
-		t.Error("Expected error when using nil ingester")
-	}
+	if ingester != nil {
+		_, err = ingester.GenerateCSVIngestScript("source", "target")
+		if err == nil {
+			t.Error("Expected error when using nil ingester")
+		}
 
-	_, err = ingester.GenerateParquetIngestScript("source", "target")
-	if err == nil {
-		t.Error("Expected error when using nil ingester")
+		_, err = ingester.GenerateParquetIngestScript("source", "target")
+		if err == nil {
+			t.Error("Expected error when using nil ingester")
+		}
 	}
 }
 

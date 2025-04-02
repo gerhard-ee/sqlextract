@@ -64,12 +64,12 @@ func (m *MemoryManager) UpdateState(table string, processedRows int64) error {
 
 	state, exists := m.states[table]
 	if !exists {
-		state = &State{
-			Table:       table,
-			LastUpdated: time.Now(),
-			Status:      "running",
-		}
-		m.states[table] = state
+		return fmt.Errorf("state not found for table: %s", table)
+	}
+
+	// Check if state is locked
+	if lockTime, exists := m.locks[table]; exists && lockTime.After(time.Now()) {
+		return fmt.Errorf("state is locked for table: %s", table)
 	}
 
 	state.ProcessedRows = processedRows
@@ -89,18 +89,17 @@ func (m *MemoryManager) CreateState(state *State) error {
 	return nil
 }
 
-func (m *MemoryManager) DeleteState(jobID string) error {
+func (m *MemoryManager) DeleteState(table string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for table, state := range m.states {
-		if state.JobID == jobID {
-			delete(m.states, table)
-			return nil
-		}
+	if _, exists := m.states[table]; !exists {
+		return fmt.Errorf("state not found for table: %s", table)
 	}
 
-	return fmt.Errorf("state not found for job ID: %s", jobID)
+	delete(m.states, table)
+	delete(m.locks, table)
+	return nil
 }
 
 func (m *MemoryManager) ListStates() ([]*State, error) {
@@ -115,27 +114,31 @@ func (m *MemoryManager) ListStates() ([]*State, error) {
 	return states, nil
 }
 
-func (m *MemoryManager) LockState(jobID string, duration time.Duration) (bool, error) {
+func (m *MemoryManager) LockState(table string, duration time.Duration) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if _, exists := m.states[table]; !exists {
+		return false, fmt.Errorf("state not found for table: %s", table)
+	}
+
 	now := time.Now()
-	if lockTime, exists := m.locks[jobID]; exists && lockTime.After(now) {
+	if lockTime, exists := m.locks[table]; exists && lockTime.After(now) {
 		return false, nil
 	}
 
-	m.locks[jobID] = now.Add(duration)
+	m.locks[table] = now.Add(duration)
 	return true, nil
 }
 
-func (m *MemoryManager) UnlockState(jobID string) error {
+func (m *MemoryManager) UnlockState(table string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.locks[jobID]; !exists {
-		return fmt.Errorf("no lock found for job ID: %s", jobID)
+	if _, exists := m.locks[table]; !exists {
+		return fmt.Errorf("no lock found for table: %s", table)
 	}
 
-	delete(m.locks, jobID)
+	delete(m.locks, table)
 	return nil
 }
