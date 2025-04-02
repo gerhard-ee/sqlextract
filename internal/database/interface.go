@@ -32,6 +32,8 @@ func NewDatabase(dbType string, cfg *config.Config, stateManager state.Manager) 
 		return NewSnowflake(cfg, stateManager)
 	case "databricks":
 		return NewDatabricks(cfg, stateManager)
+	case "duckdb":
+		return NewDuckDB(cfg, stateManager)
 	default:
 		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
