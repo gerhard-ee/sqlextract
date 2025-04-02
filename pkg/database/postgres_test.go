@@ -2,135 +2,21 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"os"
+	"path/filepath"
 	"testing"
 )
 
-var (
-	testDB *PostgresDB
-)
+func setupTestDB(t *testing.T) *DuckDB {
+	// Create temporary directory for test database
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
 
-func TestMain(m *testing.M) {
-	// Get database configuration from environment variables
 	config := &Config{
-		Host:     getEnvOrDefault("TEST_DB_HOST", "localhost"),
-		Port:     getEnvOrDefaultInt("TEST_DB_PORT", 5432),
-		User:     getEnvOrDefault("TEST_DB_USER", "postgres"),
-		Password: getEnvOrDefault("TEST_DB_PASSWORD", "postgres"),
-		DBName:   getEnvOrDefault("TEST_DB_NAME", "sqlextract_test"),
-		SSLMode:  "disable",
+		DBName: dbPath,
 	}
 
-	// Create database instance
-	db := NewPostgresDB(config)
-
-	// Drop the database if it exists
-	if err := db.DropDatabase(); err != nil {
-		fmt.Printf("Warning: Failed to drop database: %v\n", err)
-	}
-
-	// Create the database
-	if err := db.CreateDatabase(); err != nil {
-		fmt.Printf("Failed to create test database: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Connect to the database
-	if err := db.Connect(context.Background()); err != nil {
-		fmt.Printf("Failed to connect to test database: %v\n", err)
-		os.Exit(1)
-	}
-	defer db.Close()
-
-	// Run tests
-	code := m.Run()
-
-	// Clean up
-	if err := db.DropDatabase(); err != nil {
-		fmt.Printf("Warning: Failed to drop database: %v\n", err)
-	}
-
-	os.Exit(code)
-}
-
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-func getEnvOrDefaultInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		var result int
-		if _, err := fmt.Sscanf(value, "%d", &result); err == nil {
-			return result
-		}
-	}
-	return defaultValue
-}
-
-func createTestDatabase(config *Config) error {
-	// Connect to default postgres database
-	config.DBName = "postgres"
-	db, err := sql.Open("postgres", fmt.Sprintf("host=%s port=%d user=%s password=%s sslmode=%s",
-		config.Host, config.Port, config.User, config.Password, config.SSLMode))
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	// Drop database if it exists
-	dropTestDatabase(config)
-
-	// Create new database
-	_, err = db.Exec(fmt.Sprintf("CREATE DATABASE %s", config.DBName))
-	return err
-}
-
-func dropTestDatabase(config *Config) error {
-	// Connect to default postgres database
-	config.DBName = "postgres"
-	db, err := sql.Open("postgres", fmt.Sprintf("host=%s port=%d user=%s password=%s sslmode=%s",
-		config.Host, config.Port, config.User, config.Password, config.SSLMode))
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	// Terminate existing connections
-	_, err = db.Exec(fmt.Sprintf(`
-		SELECT pg_terminate_backend(pg_stat_activity.pid)
-		FROM pg_stat_activity
-		WHERE pg_stat_activity.datname = '%s'
-		AND pid <> pg_backend_pid()`, config.DBName))
-	if err != nil {
-		return err
-	}
-
-	// Drop database
-	_, err = db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", config.DBName))
-	return err
-}
-
-func setupTestDB(t *testing.T) *PostgresDB {
-	config := &Config{
-		Host:     getEnvOrDefault("TEST_DB_HOST", "localhost"),
-		Port:     getEnvOrDefaultInt("TEST_DB_PORT", 5432),
-		User:     getEnvOrDefault("TEST_DB_USER", "postgres"),
-		Password: getEnvOrDefault("TEST_DB_PASSWORD", "postgres"),
-		DBName:   getEnvOrDefault("TEST_DB_NAME", "sqlextract_test"),
-		SSLMode:  "disable",
-	}
-
-	db := NewPostgresDB(config)
-
-	// Create database
-	if err := db.CreateDatabase(); err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
+	db := NewDuckDB(config)
 
 	// Connect to database
 	if err := db.Connect(context.Background()); err != nil {
@@ -139,29 +25,23 @@ func setupTestDB(t *testing.T) *PostgresDB {
 
 	// Create test table
 	_, err := db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS test_table (
-			id SERIAL PRIMARY KEY,
+		CREATE TABLE test_table (
+			id INTEGER PRIMARY KEY,
 			name VARCHAR(255) NOT NULL,
 			age INTEGER,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 
-	// Truncate table
-	_, err = db.Exec(context.Background(), "TRUNCATE TABLE test_table RESTART IDENTITY")
-	if err != nil {
-		t.Fatalf("Failed to truncate table: %v", err)
-	}
-
 	// Insert test data
 	for i := 0; i < 100; i++ {
 		_, err := db.Exec(context.Background(), `
-			INSERT INTO test_table (name, age)
-			VALUES ($1, $2)
-		`, fmt.Sprintf("Test User %d", i), 20+i)
+			INSERT INTO test_table (id, name, age)
+			VALUES ($1, $2, $3)
+		`, i+1, fmt.Sprintf("Test User %d", i), 20+i)
 		if err != nil {
 			t.Fatalf("Failed to insert test data: %v", err)
 		}
@@ -170,14 +50,14 @@ func setupTestDB(t *testing.T) *PostgresDB {
 	return db
 }
 
-func setupTestTable(t *testing.T, db *PostgresDB) {
+func setupTestTable(t *testing.T, db *DuckDB) {
 	// Create test table
 	_, err := db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS test_table (
-			id SERIAL PRIMARY KEY,
+		CREATE TABLE test_table (
+			id INTEGER PRIMARY KEY,
 			name VARCHAR(255) NOT NULL,
 			age INTEGER,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	if err != nil {
@@ -187,16 +67,16 @@ func setupTestTable(t *testing.T, db *PostgresDB) {
 	// Insert test data
 	for i := 0; i < 100; i++ {
 		_, err := db.Exec(context.Background(), `
-			INSERT INTO test_table (name, age)
-			VALUES ($1, $2)
-		`, fmt.Sprintf("Test User %d", i), 20+i)
+			INSERT INTO test_table (id, name, age)
+			VALUES ($1, $2, $3)
+		`, i+1, fmt.Sprintf("Test User %d", i), 20+i)
 		if err != nil {
 			t.Fatalf("Failed to insert test data: %v", err)
 		}
 	}
 }
 
-func cleanupTestTable(t *testing.T, db *PostgresDB) {
+func cleanupTestTable(t *testing.T, db *DuckDB) {
 	// Drop test table
 	_, err := db.Exec(context.Background(), "DROP TABLE IF EXISTS test_table")
 	if err != nil {
@@ -205,21 +85,7 @@ func cleanupTestTable(t *testing.T, db *PostgresDB) {
 }
 
 func TestPostgresDB_Connect(t *testing.T) {
-	config := &Config{
-		Host:     getEnvOrDefault("TEST_DB_HOST", "localhost"),
-		Port:     getEnvOrDefaultInt("TEST_DB_PORT", 5432),
-		User:     getEnvOrDefault("TEST_DB_USER", "postgres"),
-		Password: getEnvOrDefault("TEST_DB_PASSWORD", "postgres"),
-		DBName:   getEnvOrDefault("TEST_DB_NAME", "sqlextract_test"),
-		SSLMode:  "disable",
-	}
-
-	db := NewPostgresDB(config)
-
-	// Test connection
-	if err := db.Connect(context.Background()); err != nil {
-		t.Fatalf("Failed to connect to database: %v", err)
-	}
+	db := setupTestDB(t)
 	defer db.Close()
 
 	// Test query
@@ -321,10 +187,10 @@ func TestPostgresDB_GetColumns(t *testing.T) {
 
 	// Verify columns
 	expectedColumns := map[string]string{
-		"id":         "integer",
-		"name":       "character varying",
-		"age":        "integer",
-		"created_at": "timestamp with time zone",
+		"id":         "INTEGER",
+		"name":       "VARCHAR",
+		"age":        "INTEGER",
+		"created_at": "TIMESTAMP",
 	}
 
 	for _, col := range columns {
