@@ -53,5 +53,6 @@ jobs:
         with:
           version: latest
           args: release --clean --snapshot
+          working-directory: .
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
