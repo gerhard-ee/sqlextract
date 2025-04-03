@@ -42,11 +42,20 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.21.7'
+
+      - name: Create Git tag
+        run: |
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "GitHub Actions"
+          git tag -a "v${GITHUB_SHA::7}" -m "Release v${GITHUB_SHA::7}"
+          git push origin "v${GITHUB_SHA::7}"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
