@@ -3,7 +3,7 @@ before:
     - go mod tidy
 
 builds:
-  - main: cmd/sqlextract/main.go
+  - main: ./cmd/sqlextract
     env:
       - CGO_ENABLED=0
     goos:
@@ -12,7 +12,8 @@ builds:
       - darwin
     goarch:
       - amd64
-      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
 
 archives:
   - format: tar.gz
