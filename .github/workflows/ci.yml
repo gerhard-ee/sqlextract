@@ -1,4 +1,4 @@
-name: CI/CD
+name: CI
 
 on:
   push:
@@ -9,31 +9,45 @@ on:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go: ['1.21']
+
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21.7'
-          check-latest: true
-          cache: true
-          cache-dependency-path: |
-            **/go.sum
-            **/go.mod
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ matrix.go }}
 
-      - name: Install dependencies
-        run: go mod download
+    - name: Check out code
+      uses: actions/checkout@v4
 
-      - name: Run tests
-        run: go test -v -timeout 30s -tags=test ./...
+    - name: Get dependencies
+      run: go mod download
 
-      - name: Clean Go module cache
-        run: go clean -modcache
+    - name: Run tests
+      run: |
+        if [ "${{ runner.os }}" = "macOS" ]; then
+          go test -v -timeout 30s ./...
+        else
+          go test -v -timeout 30s -tags=!darwin ./...
+        fi
 
-      - name: Generate coverage
-        run: go test -v -timeout 30s -coverprofile=coverage.out -tags=test ./...
+    - name: Generate coverage
+      run: |
+        if [ "${{ runner.os }}" = "macOS" ]; then
+          go test -v -timeout 30s -coverprofile=coverage.out ./...
+        else
+          go test -v -timeout 30s -coverprofile=coverage.out -tags=!darwin ./...
+        fi
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.out
+        fail-ci: false
 
   release:
     name: Release

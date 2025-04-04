@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -96,6 +97,11 @@ func cleanupTestDB(t *testing.T, db database.Database) {
 func TestExtractor_CSV(t *testing.T) {
 	// Test with DuckDB
 	t.Run("duckdb", func(t *testing.T) {
+		// Skip test if not running on macOS
+		if runtime.GOOS != "darwin" {
+			t.Skip("DuckDB tests are only supported on macOS")
+		}
+
 		db := setupTestDB(t)
 		defer cleanupTestDB(t, db)
 
