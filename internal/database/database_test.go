@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gerhard-ee/sqlextract/internal/config"
@@ -12,6 +13,11 @@ import (
 )
 
 func TestDatabaseOperations(t *testing.T) {
+	// Skip test if not running on macOS
+	if runtime.GOOS != "darwin" {
+		t.Skip("DuckDB tests are only supported on macOS")
+	}
+
 	// Create temporary directory for test files
 	testDir, err := os.MkdirTemp("", "sqlextract_test")
 	if err != nil {

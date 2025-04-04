@@ -13,13 +13,14 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        go: ['1.21']
+        go: ['1.21.7']
 
     steps:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
         go-version: ${{ matrix.go }}
+        cache: true
 
     - name: Check out code
       uses: actions/checkout@v4
@@ -30,18 +31,29 @@ jobs:
     - name: Run tests
       run: |
         if [ "${{ runner.os }}" = "macOS" ]; then
-          go test -v -timeout 30s ./...
+          go test -v -timeout 60s -race -json ./... > test-results.json
         else
-          go test -v -timeout 30s -tags=!darwin ./...
+          go test -v -timeout 60s -race -json -tags=!darwin ./... > test-results.json
         fi
 
     - name: Generate coverage
       run: |
         if [ "${{ runner.os }}" = "macOS" ]; then
-          go test -v -timeout 30s -coverprofile=coverage.out -covermode=atomic ./...
+          go test -v -timeout 60s -race -coverprofile=coverage.out -covermode=atomic ./...
         else
-          go test -v -timeout 30s -coverprofile=coverage.out -covermode=atomic -tags=!darwin ./...
+          go test -v -timeout 60s -race -coverprofile=coverage.out -covermode=atomic -tags=!darwin ./...
         fi
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results-${{ runner.os }}
+        path: |
+          test-results.json
+          coverage.out
+          **/test-results/*.xml
+        retention-days: 7
 
     - name: Upload coverage
       uses: codecov/codecov-action@v3
@@ -50,20 +62,11 @@ jobs:
         fail-ci: false
         flags: ${{ runner.os }}
 
-    - name: Upload test results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: test-results-${{ runner.os }}
-        path: |
-          coverage.out
-          **/test-results/*.xml
-
   release:
     name: Release
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.test.result == 'success'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -73,6 +76,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.21.7'
+          cache: true
 
       - name: Verify file structure
         run: |
@@ -92,4 +96,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-artifacts
-          path: dist/ 
+          path: dist/
+          retention-days: 7 
