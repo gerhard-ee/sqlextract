@@ -1,5 +1,6 @@
 before:
   hooks:
+    - cp go.mod.release go.mod
     - go mod tidy
 
 builds:
