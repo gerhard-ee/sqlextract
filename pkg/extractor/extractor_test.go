@@ -110,7 +110,7 @@ func TestExtractor_CSV(t *testing.T) {
 		outputFile := filepath.Join(tmpDir, "test.csv")
 
 		// Create extractor
-		ext := NewExtractor(db, "test_table", outputFile, "csv", 1000, 1)
+		ext := NewExtractor(db, "test_table", outputFile, "csv", int64(1000), 1)
 
 		// Run extraction
 		if err := ext.Extract(context.Background()); err != nil {
@@ -165,7 +165,7 @@ func TestExtractor_CSV(t *testing.T) {
 			tmpDir := t.TempDir()
 			outputFile := filepath.Join(tmpDir, "test.csv")
 
-			ext := NewExtractor(db, "non_existent_table", outputFile, "csv", 1000, 1)
+			ext := NewExtractor(db, "non_existent_table", outputFile, "csv", int64(1000), 1)
 			err := ext.Extract(context.Background())
 			if err == nil {
 				t.Error("Expected error for non-existent table")
@@ -184,7 +184,7 @@ func TestExtractor_CSV(t *testing.T) {
 			// Create a path that's not writable
 			outputFile := "/root/test.csv"
 
-			ext := NewExtractor(db, "test_table", outputFile, "csv", 1000, 1)
+			ext := NewExtractor(db, "test_table", outputFile, "csv", int64(1000), 1)
 			err := ext.Extract(context.Background())
 			if err == nil {
 				t.Error("Expected error for invalid output directory")
@@ -198,7 +198,7 @@ func TestExtractor_CSV(t *testing.T) {
 			t.Skip("DuckDB tests are only supported on macOS")
 		}
 
-		batchSizes := []int{1, 10, 50, 100}
+		batchSizes := []int64{1, 10, 50, 100}
 		for _, batchSize := range batchSizes {
 			t.Run(fmt.Sprintf("batch size %d", batchSize), func(t *testing.T) {
 				db := setupTestDB(t)
