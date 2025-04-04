@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"runtime"
 
 	"github.com/gerhard-ee/sqlextract/internal/config"
 	"github.com/gerhard-ee/sqlextract/internal/state"
@@ -40,6 +41,9 @@ func NewDatabase(dbType string, cfg *config.Config, stateManager state.Manager) 
 	case "databricks":
 		return NewDatabricks(cfg, stateManager)
 	case "duckdb":
+		if runtime.GOOS != "darwin" {
+			return nil, fmt.Errorf("DuckDB support is only available on macOS")
+		}
 		return NewDuckDB(cfg, stateManager)
 	default:
 		return nil, fmt.Errorf("unsupported database type: %s", dbType)

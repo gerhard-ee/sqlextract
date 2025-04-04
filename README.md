@@ -82,6 +82,32 @@ sqlextract \
   --output data.parquet
 ```
 
+### DuckDB Example (macOS only)
+
+DuckDB support is available only on macOS. Here's an example of how to use it:
+
+```bash
+# Create a DuckDB database and table
+duckdb mydb.db <<EOF
+CREATE TABLE users (
+    id INTEGER,
+    name VARCHAR,
+    email VARCHAR,
+    created_at TIMESTAMP
+);
+
+INSERT INTO users VALUES
+    (1, 'John Doe', 'john@example.com', CURRENT_TIMESTAMP),
+    (2, 'Jane Smith', 'jane@example.com', CURRENT_TIMESTAMP);
+EOF
+
+# Extract data to CSV
+sqlextract --type duckdb --database mydb.db --table users --output users.csv
+
+# Extract data to Parquet
+sqlextract --type duckdb --database mydb.db --table users --output users.parquet --format parquet
+```
+
 ## Development
 
 ### Prerequisites
