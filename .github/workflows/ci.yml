@@ -27,13 +27,13 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        run: go test -v -timeout 30s ./...
+        run: go test -v -timeout 30s -tags=test ./...
 
       - name: Clean Go module cache
         run: go clean -modcache
 
       - name: Generate coverage
-        run: go test -v -timeout 30s -coverprofile=coverage.out ./...
+        run: go test -v -timeout 30s -coverprofile=coverage.out -tags=test ./...
 
   release:
     name: Release
