@@ -6,19 +6,7 @@ package database
 import (
 	"context"
 	"fmt"
-
-	"github.com/gerhard-ee/sqlextract/internal/config"
-	"github.com/gerhard-ee/sqlextract/internal/state"
 )
-
-type DuckDB struct {
-	config       *config.Config
-	stateManager state.Manager
-}
-
-func NewDuckDB(cfg *config.Config, stateManager state.Manager) (Database, error) {
-	return nil, fmt.Errorf("DuckDB support is only available on macOS")
-}
 
 func (db *DuckDB) Connect() error {
 	return fmt.Errorf("DuckDB support is only available on macOS")

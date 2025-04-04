@@ -1,5 +1,5 @@
-//go:build test
-// +build test
+//go:build darwin
+// +build darwin
 
 package database
 
@@ -12,27 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gerhard-ee/sqlextract/internal/config"
 	"github.com/gerhard-ee/sqlextract/internal/state"
 	_ "github.com/marcboeker/go-duckdb"
 )
-
-type DuckDB struct {
-	config       *config.Config
-	db           *sql.DB
-	stateManager state.Manager
-}
-
-func NewDuckDB(cfg *config.Config, stateManager state.Manager) (Database, error) {
-	db := &DuckDB{
-		config:       cfg,
-		stateManager: stateManager,
-	}
-	if err := db.Connect(); err != nil {
-		return nil, fmt.Errorf("failed to connect to DuckDB: %v", err)
-	}
-	return db, nil
-}
 
 func (db *DuckDB) Connect() error {
 	conn, err := sql.Open("duckdb", db.config.Database)
@@ -45,13 +27,18 @@ func (db *DuckDB) Connect() error {
 }
 
 func (db *DuckDB) Close() error {
-	if db.db != nil {
-		return db.db.Close()
+	if sqlDB, ok := db.db.(*sql.DB); ok && sqlDB != nil {
+		return sqlDB.Close()
 	}
 	return nil
 }
 
 func (db *DuckDB) ExtractData(table, outputFile, format string, batchSize int, keyColumns, whereClause string) error {
+	sqlDB, ok := db.db.(*sql.DB)
+	if !ok || sqlDB == nil {
+		return fmt.Errorf("database connection not initialized")
+	}
+
 	// Get current state
 	currentState, err := db.stateManager.GetState(table)
 	if err != nil {
@@ -133,9 +120,14 @@ func (db *DuckDB) ExtractData(table, outputFile, format string, batchSize int, k
 }
 
 func (db *DuckDB) GetTotalRows(table string) (int64, error) {
+	sqlDB, ok := db.db.(*sql.DB)
+	if !ok || sqlDB == nil {
+		return 0, fmt.Errorf("database connection not initialized")
+	}
+
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
 	var count int64
-	err := db.db.QueryRow(query).Scan(&count)
+	err := sqlDB.QueryRow(query).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get row count: %v", err)
 	}
@@ -143,8 +135,13 @@ func (db *DuckDB) GetTotalRows(table string) (int64, error) {
 }
 
 func (db *DuckDB) GetColumns(table string) ([]string, error) {
+	sqlDB, ok := db.db.(*sql.DB)
+	if !ok || sqlDB == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+
 	query := fmt.Sprintf("SELECT column_name FROM information_schema.columns WHERE table_name = '%s' ORDER BY ordinal_position", table)
-	rows, err := db.db.Query(query)
+	rows, err := sqlDB.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get columns: %v", err)
 	}
@@ -162,6 +159,11 @@ func (db *DuckDB) GetColumns(table string) ([]string, error) {
 }
 
 func (db *DuckDB) ExtractBatch(table string, offset, limit int64, keyColumns, whereClause string) ([]map[string]interface{}, error) {
+	sqlDB, ok := db.db.(*sql.DB)
+	if !ok || sqlDB == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+
 	// Build the query with WHERE clause and ORDER BY if key columns are provided
 	query := fmt.Sprintf("SELECT * FROM %s", table)
 	if whereClause != "" {
@@ -172,7 +174,7 @@ func (db *DuckDB) ExtractBatch(table string, offset, limit int64, keyColumns, wh
 	}
 	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
-	rows, err := db.db.Query(query)
+	rows, err := sqlDB.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %v", err)
 	}
@@ -206,6 +208,11 @@ func (db *DuckDB) ExtractBatch(table string, offset, limit int64, keyColumns, wh
 }
 
 func (db *DuckDB) GetTableSchema(tableName string) ([]Column, error) {
+	sqlDB, ok := db.db.(*sql.DB)
+	if !ok || sqlDB == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+
 	query := fmt.Sprintf(`
 		SELECT column_name, data_type
 		FROM information_schema.columns
@@ -213,7 +220,7 @@ func (db *DuckDB) GetTableSchema(tableName string) ([]Column, error) {
 		ORDER BY ordinal_position
 	`)
 
-	rows, err := db.db.Query(query, tableName)
+	rows, err := sqlDB.Query(query, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table schema: %v", err)
 	}
@@ -233,9 +240,14 @@ func (db *DuckDB) GetTableSchema(tableName string) ([]Column, error) {
 }
 
 func (db *DuckDB) GetRowCount(tableName string) (int64, error) {
+	sqlDB, ok := db.db.(*sql.DB)
+	if !ok || sqlDB == nil {
+		return 0, fmt.Errorf("database connection not initialized")
+	}
+
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
 	var count int64
-	err := db.db.QueryRow(query).Scan(&count)
+	err := sqlDB.QueryRow(query).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get row count: %v", err)
 	}
@@ -243,7 +255,12 @@ func (db *DuckDB) GetRowCount(tableName string) (int64, error) {
 }
 
 func (db *DuckDB) Exec(ctx context.Context, query string) error {
-	_, err := db.db.ExecContext(ctx, query)
+	sqlDB, ok := db.db.(*sql.DB)
+	if !ok || sqlDB == nil {
+		return fmt.Errorf("database connection not initialized")
+	}
+
+	_, err := sqlDB.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to execute query: %v", err)
 	}
