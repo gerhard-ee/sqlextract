@@ -14,6 +14,9 @@ import (
 
 	"github.com/gerhard-ee/sqlextract/internal/state"
 	_ "github.com/marcboeker/go-duckdb"
+	"github.com/xitongsys/parquet-go-source/local"
+	"github.com/xitongsys/parquet-go/parquet"
+	"github.com/xitongsys/parquet-go/writer"
 )
 
 func (db *DuckDB) Connect() error {
@@ -70,12 +73,45 @@ func (db *DuckDB) ExtractData(table, outputFile, format string, batchSize int, k
 		return fmt.Errorf("failed to get columns: %v", err)
 	}
 
+	// Get table schema
+	schema, err := db.GetTableSchema(table)
+	if err != nil {
+		return fmt.Errorf("failed to get table schema: %v", err)
+	}
+
 	// Create output file
 	file, err := os.Create(outputFile)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %v", err)
 	}
 	defer file.Close()
+
+	var pw *writer.ParquetWriter
+	if format == "parquet" {
+		// Create Parquet writer
+		fw, err := local.NewLocalFileWriter(outputFile)
+		if err != nil {
+			return fmt.Errorf("failed to create Parquet file writer: %v", err)
+		}
+		defer fw.Close()
+
+		// Create Parquet schema
+		parquetSchema := make([]*parquet.SchemaElement, 0, len(schema))
+		for _, col := range schema {
+			parquetType := getParquetType(col.Type)
+			parquetSchema = append(parquetSchema, &parquet.SchemaElement{
+				Type:           parquetType,
+				Name:           col.Name,
+				RepetitionType: parquet.FieldRepetitionTypePtr(parquet.FieldRepetitionType_OPTIONAL),
+			})
+		}
+
+		pw, err = writer.NewParquetWriter(fw, parquetSchema, 4)
+		if err != nil {
+			return fmt.Errorf("failed to create Parquet writer: %v", err)
+		}
+		defer pw.WriteStop()
+	}
 
 	// Write header if CSV format
 	if format == "csv" {
@@ -106,6 +142,10 @@ func (db *DuckDB) ExtractData(table, outputFile, format string, batchSize int, k
 				if _, err := fmt.Fprintf(file, "%s\n", strings.Join(values, ",")); err != nil {
 					return fmt.Errorf("failed to write row: %v", err)
 				}
+			} else if format == "parquet" {
+				if err := pw.Write(row); err != nil {
+					return fmt.Errorf("failed to write Parquet row: %v", err)
+				}
 			}
 			processedRows++
 		}
@@ -117,6 +157,24 @@ func (db *DuckDB) ExtractData(table, outputFile, format string, batchSize int, k
 	}
 
 	return nil
+}
+
+// getParquetType converts SQL type to Parquet type
+func getParquetType(sqlType string) *parquet.Type {
+	switch strings.ToLower(sqlType) {
+	case "integer", "int", "bigint":
+		return parquet.TypePtr(parquet.Type_INT64)
+	case "varchar", "text", "string":
+		return parquet.TypePtr(parquet.Type_BYTE_ARRAY)
+	case "timestamp", "datetime":
+		return parquet.TypePtr(parquet.Type_INT64)
+	case "boolean":
+		return parquet.TypePtr(parquet.Type_BOOLEAN)
+	case "float", "double", "decimal":
+		return parquet.TypePtr(parquet.Type_DOUBLE)
+	default:
+		return parquet.TypePtr(parquet.Type_BYTE_ARRAY)
+	}
 }
 
 func (db *DuckDB) GetTotalRows(table string) (int64, error) {

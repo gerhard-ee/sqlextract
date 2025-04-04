@@ -1,6 +1,6 @@
 module github.com/gerhard-ee/sqlextract
 
-go 1.24
+go 1.21
 
 toolchain go1.24.1
 
@@ -9,7 +9,7 @@ require (
 	github.com/databricks/databricks-sql-go v1.6.2
 	github.com/denisenkom/go-mssqldb v0.12.3
 	github.com/lib/pq v1.10.9
-	github.com/marcboeker/go-duckdb v1.8.5
+	github.com/marcboeker/go-duckdb v1.5.6
 	github.com/snowflakedb/gosnowflake v1.8.0
 	github.com/xitongsys/parquet-go v1.6.2
 	github.com/xitongsys/parquet-go-source v0.0.0-20241021075129-b732d2ac9c9b
