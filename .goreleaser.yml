@@ -16,8 +16,6 @@ builds:
       - amd64
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
-    tags:
-      - test
 
 archives:
   - format: tar.gz
