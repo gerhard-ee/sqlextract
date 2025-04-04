@@ -1,1 +1,65 @@
- 
+SQL Extract - A powerful tool for extracting data from SQL databases
+
+USAGE:
+  sqlextract [OPTIONS] --type <TYPE> --table <TABLE> --output <FILE>
+
+REQUIRED OPTIONS:
+  --type, -t <TYPE>        Database type (postgres, mssql, bigquery, snowflake, databricks, duckdb)
+  --table, -T <TABLE>      Table name to extract
+  --output, -o <FILE>      Output file path (CSV or Parquet)
+
+DATABASE CONNECTION OPTIONS:
+  --host, -H <HOST>        Database host (required for postgres, mssql)
+  --port, -P <PORT>        Database port (required for postgres, mssql)
+  --user, -u <USER>        Database user (required for postgres, mssql, snowflake)
+  --password, -p <PASS>    Database password (required for postgres, mssql, snowflake)
+  --database, -d <DB>      Database name (required for all types)
+  --schema, -s <SCHEMA>    Database schema (optional)
+
+BIGQUERY OPTIONS:
+  --project <ID>           Google Cloud project ID (required)
+  --location <LOC>         BigQuery dataset location (optional)
+
+SNOWFLAKE OPTIONS:
+  --account <ID>           Snowflake account identifier (required)
+  --warehouse <NAME>       Snowflake warehouse name (required)
+  --role <NAME>            Snowflake role name (required)
+
+DATABRICKS OPTIONS:
+  --workspace <URL>        Databricks workspace URL (required)
+  --token <TOKEN>          Databricks access token (required)
+  --catalog <NAME>         Databricks catalog name (required)
+
+EXTRACTION OPTIONS:
+  --format, -f <FORMAT>    Output format (csv or parquet, default: csv)
+  --batch-size, -b <SIZE>  Number of rows per batch (default: 1000)
+  --keys <COLUMNS>         Comma-separated key columns for pagination
+  --where <CLAUSE>         SQL WHERE clause for filtering data
+
+STATE MANAGEMENT OPTIONS:
+  --state-type <TYPE>      State management type (memory or kubernetes, default: memory)
+  --namespace <NS>         Kubernetes namespace (required for kubernetes state)
+
+EXAMPLES:
+  # PostgreSQL extraction
+  sqlextract --type postgres --host localhost --port 5432 --user postgres \
+             --password secret --database mydb --table users --output users.csv
+
+  # BigQuery extraction to Parquet
+  sqlextract --type bigquery --project my-project --database my_dataset \
+             --table my_table --output data.parquet --format parquet
+
+  # Snowflake extraction with filtering
+  sqlextract --type snowflake --account my-account --warehouse my_warehouse \
+             --role my_role --user my_user --password secret --database my_db \
+             --table customers --output customers.csv --where "created_at > '2024-01-01'"
+
+  # DuckDB extraction (macOS only)
+  sqlextract --type duckdb --database mydb.db --table users --output users.csv
+
+ENVIRONMENT VARIABLES:
+  SQL_EXTRACT_PASSWORD      Database password
+  SQL_EXTRACT_USER         Database user
+  SQL_EXTRACT_DATABASE     Database name
+
+For more information and examples, visit: https://github.com/gerhard-ee/sqlextract 

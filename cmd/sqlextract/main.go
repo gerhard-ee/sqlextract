@@ -114,7 +114,16 @@ func printHelp() {
 	// Read help text from file
 	helpText, err := os.ReadFile("cmd/sqlextract/help.txt")
 	if err != nil {
-		log.Fatalf("Failed to read help text: %v", err)
+		// Fallback to basic help if file is not found
+		fmt.Printf("%sSQL Extract - A powerful tool for extracting data from SQL databases%s\n", headerColor, resetColor)
+		fmt.Printf("\n%sUSAGE:%s\n", sectionColor, resetColor)
+		fmt.Printf("  sqlextract [OPTIONS] --type <TYPE> --table <TABLE> --output <FILE>\n\n")
+		fmt.Printf("%sREQUIRED OPTIONS:%s\n", sectionColor, resetColor)
+		fmt.Printf("  %s--type, -t%s <TYPE>        Database type (postgres, mssql, bigquery, snowflake, databricks, duckdb)\n", flagColor, resetColor)
+		fmt.Printf("  %s--table, -T%s <TABLE>      Table name to extract\n", flagColor, resetColor)
+		fmt.Printf("  %s--output, -o%s <FILE>      Output file path (CSV or Parquet)\n", flagColor, resetColor)
+		fmt.Printf("\nFor more information, visit: https://github.com/gerhard-ee/sqlextract\n")
+		return
 	}
 
 	// Print help text with colors
