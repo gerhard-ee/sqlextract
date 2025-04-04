@@ -7,234 +7,129 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
+	"github.com/gerhard-ee/sqlextract/internal/config"
 	"github.com/gerhard-ee/sqlextract/internal/state"
 	_ "github.com/marcboeker/go-duckdb"
-	"github.com/xitongsys/parquet-go-source/local"
-	"github.com/xitongsys/parquet-go/parquet"
-	"github.com/xitongsys/parquet-go/writer"
 )
 
-func (db *DuckDB) Connect() error {
-	conn, err := sql.Open("duckdb", db.config.Database)
+// duckDBDarwin is the macOS-specific implementation of DuckDB
+type duckDBDarwin struct {
+	*duckDBBase
+	db *sql.DB
+}
+
+// NewDuckDB creates a new DuckDB instance for macOS
+func NewDuckDB(cfg *config.Config, stateManager state.Manager) (DuckDB, error) {
+	base, err := newDuckDBBase(cfg, stateManager)
 	if err != nil {
-		return fmt.Errorf("failed to connect to DuckDB: %v", err)
+		return nil, err
+	}
+	return &duckDBDarwin{
+		duckDBBase: base,
+	}, nil
+}
+
+// Connect establishes a connection to the DuckDB database
+func (d *duckDBDarwin) Connect() error {
+	// For DuckDB, the Database is treated as a file path
+	dbPath := d.config.Database
+	if !filepath.IsAbs(dbPath) {
+		dbPath = filepath.Join(".", dbPath)
 	}
 
-	db.db = conn
+	dsn := fmt.Sprintf("%s", dbPath)
+	db, err := sql.Open("duckdb", dsn)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %v", err)
+	}
+
+	// Test the connection
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("failed to connect to database: %v", err)
+	}
+
+	d.db = db
 	return nil
 }
 
-func (db *DuckDB) Close() error {
-	if sqlDB, ok := db.db.(*sql.DB); ok && sqlDB != nil {
-		return sqlDB.Close()
+// Close closes the database connection
+func (d *duckDBDarwin) Close() error {
+	if d.db != nil {
+		return d.db.Close()
 	}
 	return nil
 }
 
-func (db *DuckDB) ExtractData(table, outputFile, format string, batchSize int, keyColumns, whereClause string) error {
-	sqlDB, ok := db.db.(*sql.DB)
-	if !ok || sqlDB == nil {
-		return fmt.Errorf("database connection not initialized")
-	}
+// GetTableSchema returns the schema of a table
+func (d *duckDBDarwin) GetTableSchema(tableName string) ([]Column, error) {
+	query := `
+		SELECT column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_name = $1
+		ORDER BY ordinal_position
+	`
 
-	// Get current state
-	currentState, err := db.stateManager.GetState(table)
+	rows, err := d.db.Query(query, tableName)
 	if err != nil {
-		// Create new state if it doesn't exist
-		currentState = &state.State{
-			Table:       table,
-			LastUpdated: time.Now(),
-			Status:      "running",
+		return nil, fmt.Errorf("failed to query table schema: %v", err)
+	}
+	defer rows.Close()
+
+	var columns []Column
+	for rows.Next() {
+		var col Column
+		var nullable string
+		if err := rows.Scan(&col.Name, &col.Type, &nullable); err != nil {
+			return nil, fmt.Errorf("failed to scan column: %v", err)
 		}
-		if err := db.stateManager.CreateState(currentState); err != nil {
-			return fmt.Errorf("failed to create state: %v", err)
-		}
+		col.Nullable = nullable == "YES"
+		columns = append(columns, col)
 	}
 
-	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(filepath.Dir(outputFile), 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %v", err)
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating columns: %v", err)
 	}
 
-	// Get total rows
-	totalRows, err := db.GetTotalRows(table)
-	if err != nil {
-		return fmt.Errorf("failed to get total rows: %v", err)
-	}
-
-	// Get columns
-	columns, err := db.GetColumns(table)
-	if err != nil {
-		return fmt.Errorf("failed to get columns: %v", err)
-	}
-
-	// Get table schema
-	schema, err := db.GetTableSchema(table)
-	if err != nil {
-		return fmt.Errorf("failed to get table schema: %v", err)
-	}
-
-	// Create output file
-	file, err := os.Create(outputFile)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %v", err)
-	}
-	defer file.Close()
-
-	var pw *writer.ParquetWriter
-	if format == "parquet" {
-		// Create Parquet writer
-		fw, err := local.NewLocalFileWriter(outputFile)
-		if err != nil {
-			return fmt.Errorf("failed to create Parquet file writer: %v", err)
-		}
-		defer fw.Close()
-
-		// Create Parquet schema
-		parquetSchema := make([]*parquet.SchemaElement, 0, len(schema))
-		for _, col := range schema {
-			parquetType := getParquetType(col.Type)
-			parquetSchema = append(parquetSchema, &parquet.SchemaElement{
-				Type:           parquetType,
-				Name:           col.Name,
-				RepetitionType: parquet.FieldRepetitionTypePtr(parquet.FieldRepetitionType_OPTIONAL),
-			})
-		}
-
-		pw, err = writer.NewParquetWriter(fw, parquetSchema, 4)
-		if err != nil {
-			return fmt.Errorf("failed to create Parquet writer: %v", err)
-		}
-		defer pw.WriteStop()
-	}
-
-	// Write header if CSV format
-	if format == "csv" {
-		if _, err := fmt.Fprintf(file, "%s\n", strings.Join(columns, ",")); err != nil {
-			return fmt.Errorf("failed to write header: %v", err)
-		}
-	}
-
-	// Process data in batches
-	processedRows := int64(0)
-	for offset := int64(0); offset < totalRows; offset += int64(batchSize) {
-		rows, err := db.ExtractBatch(table, offset, int64(batchSize), keyColumns, whereClause)
-		if err != nil {
-			return fmt.Errorf("failed to extract batch: %v", err)
-		}
-
-		// Write rows
-		for _, row := range rows {
-			if format == "csv" {
-				values := make([]string, len(columns))
-				for i, col := range columns {
-					if val := row[col]; val == nil {
-						values[i] = "NULL"
-					} else {
-						values[i] = fmt.Sprintf("%v", val)
-					}
-				}
-				if _, err := fmt.Fprintf(file, "%s\n", strings.Join(values, ",")); err != nil {
-					return fmt.Errorf("failed to write row: %v", err)
-				}
-			} else if format == "parquet" {
-				if err := pw.Write(row); err != nil {
-					return fmt.Errorf("failed to write Parquet row: %v", err)
-				}
-			}
-			processedRows++
-		}
-
-		// Update state
-		if err := db.stateManager.UpdateState(table, processedRows); err != nil {
-			return fmt.Errorf("failed to update state: %v", err)
-		}
-	}
-
-	return nil
+	return columns, nil
 }
 
-// getParquetType converts SQL type to Parquet type
-func getParquetType(sqlType string) *parquet.Type {
-	switch strings.ToLower(sqlType) {
-	case "integer", "int", "bigint":
-		return parquet.TypePtr(parquet.Type_INT64)
-	case "varchar", "text", "string":
-		return parquet.TypePtr(parquet.Type_BYTE_ARRAY)
-	case "timestamp", "datetime":
-		return parquet.TypePtr(parquet.Type_INT64)
-	case "boolean":
-		return parquet.TypePtr(parquet.Type_BOOLEAN)
-	case "float", "double", "decimal":
-		return parquet.TypePtr(parquet.Type_DOUBLE)
-	default:
-		return parquet.TypePtr(parquet.Type_BYTE_ARRAY)
-	}
+// Exec executes a SQL query
+func (d *duckDBDarwin) Exec(ctx context.Context, query string) error {
+	_, err := d.db.ExecContext(ctx, query)
+	return err
 }
 
-func (db *DuckDB) GetTotalRows(table string) (int64, error) {
-	sqlDB, ok := db.db.(*sql.DB)
-	if !ok || sqlDB == nil {
-		return 0, fmt.Errorf("database connection not initialized")
-	}
-
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", table)
+// GetTotalRows returns the total number of rows in a table
+func (d *duckDBDarwin) GetTotalRows(table string) (int64, error) {
 	var count int64
-	err := sqlDB.QueryRow(query).Scan(&count)
+	err := d.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get row count: %v", err)
 	}
 	return count, nil
 }
 
-func (db *DuckDB) GetColumns(table string) ([]string, error) {
-	sqlDB, ok := db.db.(*sql.DB)
-	if !ok || sqlDB == nil {
-		return nil, fmt.Errorf("database connection not initialized")
-	}
-
-	query := fmt.Sprintf("SELECT column_name FROM information_schema.columns WHERE table_name = '%s' ORDER BY ordinal_position", table)
-	rows, err := sqlDB.Query(query)
+// GetColumns returns the column names for a table
+func (d *duckDBDarwin) GetColumns(table string) ([]string, error) {
+	schema, err := d.GetTableSchema(table)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get columns: %v", err)
+		return nil, err
 	}
-	defer rows.Close()
-
-	var columns []string
-	for rows.Next() {
-		var column string
-		if err := rows.Scan(&column); err != nil {
-			return nil, fmt.Errorf("failed to scan column: %v", err)
-		}
-		columns = append(columns, column)
+	columns := make([]string, len(schema))
+	for i, col := range schema {
+		columns[i] = col.Name
 	}
 	return columns, nil
 }
 
-func (db *DuckDB) ExtractBatch(table string, offset, limit int64, keyColumns, whereClause string) ([]map[string]interface{}, error) {
-	sqlDB, ok := db.db.(*sql.DB)
-	if !ok || sqlDB == nil {
-		return nil, fmt.Errorf("database connection not initialized")
-	}
-
-	// Build the query with WHERE clause and ORDER BY if key columns are provided
-	query := fmt.Sprintf("SELECT * FROM %s", table)
-	if whereClause != "" {
-		query += " WHERE " + whereClause
-	}
-	if keyColumns != "" {
-		query += " ORDER BY " + keyColumns
-	}
-	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
-
-	rows, err := sqlDB.Query(query)
+// ExtractBatch extracts a batch of rows from a table
+func (d *duckDBDarwin) ExtractBatch(table string, offset, limit int64, keyColumns, whereClause string) ([]map[string]interface{}, error) {
+	query := fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET %d", table, limit, offset)
+	rows, err := d.db.Query(query)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute query: %v", err)
+		return nil, fmt.Errorf("failed to query rows: %v", err)
 	}
 	defer rows.Close()
 
@@ -262,65 +157,19 @@ func (db *DuckDB) ExtractBatch(table string, offset, limit int64, keyColumns, wh
 		result = append(result, row)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %v", err)
+	}
+
 	return result, nil
 }
 
-func (db *DuckDB) GetTableSchema(tableName string) ([]Column, error) {
-	sqlDB, ok := db.db.(*sql.DB)
-	if !ok || sqlDB == nil {
-		return nil, fmt.Errorf("database connection not initialized")
-	}
-
-	query := fmt.Sprintf(`
-		SELECT column_name, data_type
-		FROM information_schema.columns
-		WHERE table_name = $1
-		ORDER BY ordinal_position
-	`)
-
-	rows, err := sqlDB.Query(query, tableName)
+// ExtractData extracts data from a table and writes it to a file
+func (d *duckDBDarwin) ExtractData(table, outputFile, format string, batchSize int, keyColumns, whereClause string) error {
+	query := fmt.Sprintf("COPY %s TO '%s' (FORMAT %s)", table, outputFile, format)
+	_, err := d.db.Exec(query)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get table schema: %v", err)
-	}
-	defer rows.Close()
-
-	var columns []Column
-	for rows.Next() {
-		var col Column
-		err := rows.Scan(&col.Name, &col.Type)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan schema row: %v", err)
-		}
-		columns = append(columns, col)
-	}
-
-	return columns, nil
-}
-
-func (db *DuckDB) GetRowCount(tableName string) (int64, error) {
-	sqlDB, ok := db.db.(*sql.DB)
-	if !ok || sqlDB == nil {
-		return 0, fmt.Errorf("database connection not initialized")
-	}
-
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
-	var count int64
-	err := sqlDB.QueryRow(query).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get row count: %v", err)
-	}
-	return count, nil
-}
-
-func (db *DuckDB) Exec(ctx context.Context, query string) error {
-	sqlDB, ok := db.db.(*sql.DB)
-	if !ok || sqlDB == nil {
-		return fmt.Errorf("database connection not initialized")
-	}
-
-	_, err := sqlDB.ExecContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("failed to execute query: %v", err)
+		return fmt.Errorf("failed to extract data: %v", err)
 	}
 	return nil
 }

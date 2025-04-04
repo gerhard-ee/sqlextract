@@ -17,6 +17,7 @@ type Config struct {
 
 // Column represents a database column
 type Column struct {
-	Name string
-	Type string
+	Name     string
+	Type     string
+	Nullable bool
 }

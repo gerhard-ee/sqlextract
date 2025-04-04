@@ -1,6 +1,6 @@
 module github.com/gerhard-ee/sqlextract
 
-go 1.21
+go 1.24
 
 toolchain go1.24.1
 
@@ -9,7 +9,8 @@ require (
 	github.com/databricks/databricks-sql-go v1.6.2
 	github.com/denisenkom/go-mssqldb v0.12.3
 	github.com/lib/pq v1.10.9
-	github.com/marcboeker/go-duckdb v1.5.6
+	github.com/marcboeker/go-duckdb v1.8.5
+	github.com/microsoft/go-mssqldb v1.8.0
 	github.com/snowflakedb/gosnowflake v1.8.0
 	github.com/xitongsys/parquet-go v1.6.2
 	github.com/xitongsys/parquet-go-source v0.0.0-20241021075129-b732d2ac9c9b
@@ -95,7 +96,6 @@ require (
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/microsoft/go-mssqldb v1.8.0 // indirect
 	github.com/minio/asm2plan9s v0.0.0-20200509001527-cdd76441f9d8 // indirect
 	github.com/minio/c2goasm v0.0.0-20190812172519-36a3d3bbc4f3 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
