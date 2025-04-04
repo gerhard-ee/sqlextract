@@ -136,4 +136,93 @@ func TestExtractor_CSV(t *testing.T) {
 			t.Errorf("Expected headers %v, got %v", expectedHeaders, actualHeaders)
 		}
 	})
+
+	// Test error cases
+	t.Run("error cases", func(t *testing.T) {
+		// Test with invalid database type
+		t.Run("invalid database type", func(t *testing.T) {
+			stateManager := state.NewMemoryManager()
+			config := &config.Config{
+				Type:     "invalid",
+				Database: "test.db",
+			}
+
+			_, err := database.NewDatabase("invalid", config, stateManager)
+			if err == nil {
+				t.Error("Expected error for invalid database type")
+			}
+		})
+
+		// Test with non-existent table
+		t.Run("non-existent table", func(t *testing.T) {
+			if runtime.GOOS != "darwin" {
+				t.Skip("DuckDB tests are only supported on macOS")
+			}
+
+			db := setupTestDB(t)
+			defer cleanupTestDB(t, db)
+
+			tmpDir := t.TempDir()
+			outputFile := filepath.Join(tmpDir, "test.csv")
+
+			ext := NewExtractor(db, "non_existent_table", outputFile, "csv", 1000, 1)
+			err := ext.Extract(context.Background())
+			if err == nil {
+				t.Error("Expected error for non-existent table")
+			}
+		})
+
+		// Test with invalid output directory
+		t.Run("invalid output directory", func(t *testing.T) {
+			if runtime.GOOS != "darwin" {
+				t.Skip("DuckDB tests are only supported on macOS")
+			}
+
+			db := setupTestDB(t)
+			defer cleanupTestDB(t, db)
+
+			// Create a path that's not writable
+			outputFile := "/root/test.csv"
+
+			ext := NewExtractor(db, "test_table", outputFile, "csv", 1000, 1)
+			err := ext.Extract(context.Background())
+			if err == nil {
+				t.Error("Expected error for invalid output directory")
+			}
+		})
+	})
+
+	// Test with different batch sizes
+	t.Run("batch sizes", func(t *testing.T) {
+		if runtime.GOOS != "darwin" {
+			t.Skip("DuckDB tests are only supported on macOS")
+		}
+
+		batchSizes := []int{1, 10, 50, 100}
+		for _, batchSize := range batchSizes {
+			t.Run(fmt.Sprintf("batch size %d", batchSize), func(t *testing.T) {
+				db := setupTestDB(t)
+				defer cleanupTestDB(t, db)
+
+				tmpDir := t.TempDir()
+				outputFile := filepath.Join(tmpDir, fmt.Sprintf("test_%d.csv", batchSize))
+
+				ext := NewExtractor(db, "test_table", outputFile, "csv", batchSize, 1)
+				if err := ext.Extract(context.Background()); err != nil {
+					t.Fatalf("Failed to extract data with batch size %d: %v", batchSize, err)
+				}
+
+				// Verify output
+				data, err := os.ReadFile(outputFile)
+				if err != nil {
+					t.Fatalf("Failed to read output file: %v", err)
+				}
+
+				lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+				if len(lines) != 101 { // 100 rows + header
+					t.Errorf("Expected 101 lines (including header), got %d", len(lines))
+				}
+			})
+		}
+	})
 }
